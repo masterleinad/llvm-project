@@ -120,6 +120,11 @@ New checks
   Flags use of the `C` standard library functions ``memset``, ``memcpy`` and
   ``memcmp`` and similar derivatives on non-trivial types.
 
+- New :doc:`kokkos-implicit-this-capture
+  <clang-tidy/checks/kokkos-implicit-this-capture>` check.
+
+  New check for implicit this capture detection
+
 - New :doc:`llvmlibc-callee-namespace
   <clang-tidy/checks/llvmlibc-callee-namespace>` check.
 
