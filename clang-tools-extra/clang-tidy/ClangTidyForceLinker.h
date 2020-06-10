@@ -1,5 +1,9 @@
 //===- ClangTidyForceLinker.h - clang-tidy --------------------------------===//
 //
+// Copyright 2020 National Technology & Engineering Solutions of Sandia, LLC
+// (NTESS). Under the terms of Contract DE-NA0003525 with NTESS, the U.S.
+// Government retains certain rights in this software.
+//
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
@@ -64,6 +68,11 @@ static int LLVM_ATTRIBUTE_UNUSED GoogleModuleAnchorDestination =
 extern volatile int HICPPModuleAnchorSource;
 static int LLVM_ATTRIBUTE_UNUSED HICPPModuleAnchorDestination =
     HICPPModuleAnchorSource;
+
+// This anchor is used to force the linker to link the KokkosModule.
+extern volatile int KokkosModuleAnchorSource;
+static int LLVM_ATTRIBUTE_UNUSED KokkosModuleAnchorDestination =
+    KokkosModuleAnchorSource;
 
 // This anchor is used to force the linker to link the LinuxKernelModule.
 extern volatile int LinuxKernelModuleAnchorSource;

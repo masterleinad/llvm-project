@@ -61,6 +61,10 @@ def write_header(module_path, module, namespace, check_name, check_name_camel):
     f.write('*- C++ -*-===//')
     f.write("""
 //
+// Copyright 2020 National Technology & Engineering Solutions of Sandia,
+// LLC (NTESS). Under the terms of Contract DE-NA0003525 with NTESS, the U.S.
+// Government retains certain rights in this software.
+//
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
