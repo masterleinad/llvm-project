@@ -22,6 +22,16 @@ namespace llvm {
 /// PPCFunctionInfo - This class is derived from MachineFunction private
 /// PowerPC target-specific information for each MachineFunction.
 class PPCFunctionInfo : public MachineFunctionInfo {
+public:
+  // The value in the ParamType are used to indicate the bitstrings used in the
+  // encoding format.
+  enum ParamType {
+    FixedType = 0x0,
+    ShortFloatPoint = 0x2,
+    LongFloatPoint = 0x3
+  };
+
+private:
   virtual void anchor();
 
   /// FramePointerSaveIndex - Frame index of where the old frame pointer is
@@ -69,9 +79,6 @@ class PPCFunctionInfo : public MachineFunctionInfo {
   /// disabled.
   bool DisableNonVolatileCR = false;
 
-  /// Indicates whether VRSAVE is spilled in the current function.
-  bool SpillsVRSAVE = false;
-
   /// LRStoreRequired - The bool indicates whether there is some explicit use of
   /// the LR/LR8 stack slot that is not obvious from scanning the code.  This
   /// requires that the code generator produce a store of LR to the stack on
@@ -110,6 +117,20 @@ class PPCFunctionInfo : public MachineFunctionInfo {
   /// register for parameter passing.
   unsigned VarArgsNumFPR = 0;
 
+  /// FixedParamNum - Number of fixed parameter.
+  unsigned FixedParamNum = 0;
+
+  /// FloatingParamNum - Number of floating point parameter.
+  unsigned FloatingPointParamNum = 0;
+
+  /// ParamType - Encode type for every parameter
+  /// in the order of parameters passing in.
+  /// Bitstring starts from the most significant (leftmost) bit.
+  /// '0'b => fixed parameter.
+  /// '10'b => floating point short parameter.
+  /// '11'b => floating point long parameter.
+  uint32_t ParameterType = 0;
+
   /// CRSpillFrameIndex - FrameIndex for CR spill slot for 32-bit SVR4.
   int CRSpillFrameIndex = 0;
 
@@ -117,9 +138,6 @@ class PPCFunctionInfo : public MachineFunctionInfo {
   /// epilogue then they are added to this array. This is used for the
   /// 64-bit SVR4 ABI.
   SmallVector<Register, 3> MustSaveCRs;
-
-  /// Hold onto our MachineFunction context.
-  MachineFunction &MF;
 
   /// Whether this uses the PIC Base register or not.
   bool UsesPICBase = false;
@@ -129,7 +147,7 @@ class PPCFunctionInfo : public MachineFunctionInfo {
   std::vector<std::pair<Register, ISD::ArgFlagsTy>> LiveInAttrs;
 
 public:
-  explicit PPCFunctionInfo(MachineFunction &MF);
+  explicit PPCFunctionInfo(const MachineFunction &MF);
 
   int getFramePointerSaveIndex() const { return FramePointerSaveIndex; }
   void setFramePointerSaveIndex(int Idx) { FramePointerSaveIndex = Idx; }
@@ -178,9 +196,6 @@ public:
   void setDisableNonVolatileCR() { DisableNonVolatileCR = true; }
   bool isNonVolatileCRDisabled() const { return DisableNonVolatileCR; }
 
-  void setSpillsVRSAVE()       { SpillsVRSAVE = true; }
-  bool isVRSAVESpilled() const { return SpillsVRSAVE; }
-
   void setLRStoreRequired() { LRStoreRequired = true; }
   bool isLRStoreRequired() const { return LRStoreRequired; }
 
@@ -198,6 +213,13 @@ public:
 
   unsigned getVarArgsNumGPR() const { return VarArgsNumGPR; }
   void setVarArgsNumGPR(unsigned Num) { VarArgsNumGPR = Num; }
+
+  unsigned getFixedParamNum() const { return FixedParamNum; }
+
+  unsigned getFloatingPointParamNum() const { return FloatingPointParamNum; }
+
+  uint32_t getParameterType() const { return ParameterType; }
+  void appendParameterType(ParamType Type);
 
   unsigned getVarArgsNumFPR() const { return VarArgsNumFPR; }
   void setVarArgsNumFPR(unsigned Num) { VarArgsNumFPR = Num; }
@@ -225,11 +247,11 @@ public:
   void setUsesPICBase(bool uses) { UsesPICBase = uses; }
   bool usesPICBase() const { return UsesPICBase; }
 
-  MCSymbol *getPICOffsetSymbol() const;
+  MCSymbol *getPICOffsetSymbol(MachineFunction &MF) const;
 
-  MCSymbol *getGlobalEPSymbol() const;
-  MCSymbol *getLocalEPSymbol() const;
-  MCSymbol *getTOCOffsetSymbol() const;
+  MCSymbol *getGlobalEPSymbol(MachineFunction &MF) const;
+  MCSymbol *getLocalEPSymbol(MachineFunction &MF) const;
+  MCSymbol *getTOCOffsetSymbol(MachineFunction &MF) const;
 };
 
 } // end namespace llvm

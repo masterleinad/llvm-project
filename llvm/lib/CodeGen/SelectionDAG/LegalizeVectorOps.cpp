@@ -143,8 +143,8 @@ class VectorLegalizer {
   void ExpandSADDSUBO(SDNode *Node, SmallVectorImpl<SDValue> &Results);
   void ExpandMULO(SDNode *Node, SmallVectorImpl<SDValue> &Results);
   void ExpandFixedPointDiv(SDNode *Node, SmallVectorImpl<SDValue> &Results);
-  SDValue ExpandStrictFPOp(SDNode *Node);
   void ExpandStrictFPOp(SDNode *Node, SmallVectorImpl<SDValue> &Results);
+  void ExpandREM(SDNode *Node, SmallVectorImpl<SDValue> &Results);
 
   void UnrollStrictFPOp(SDNode *Node, SmallVectorImpl<SDValue> &Results);
 
@@ -453,6 +453,10 @@ SDValue VectorLegalizer::LegalizeOp(SDValue Op) {
   case ISD::UADDSAT:
   case ISD::SSUBSAT:
   case ISD::USUBSAT:
+  case ISD::SSHLSAT:
+  case ISD::USHLSAT:
+  case ISD::FP_TO_SINT_SAT:
+  case ISD::FP_TO_UINT_SAT:
     Action = TLI.getOperationAction(Node->getOpcode(), Node->getValueType(0));
     break;
   case ISD::SMULFIX:
@@ -485,6 +489,11 @@ SDValue VectorLegalizer::LegalizeOp(SDValue Op) {
   case ISD::VECREDUCE_FMIN:
     Action = TLI.getOperationAction(Node->getOpcode(),
                                     Node->getOperand(0).getValueType());
+    break;
+  case ISD::VECREDUCE_SEQ_FADD:
+  case ISD::VECREDUCE_SEQ_FMUL:
+    Action = TLI.getOperationAction(Node->getOpcode(),
+                                    Node->getOperand(1).getValueType());
     break;
   }
 
@@ -793,7 +802,7 @@ void VectorLegalizer::Expand(SDNode *Node, SmallVectorImpl<SDValue> &Results) {
     break;
   case ISD::ROTL:
   case ISD::ROTR:
-    if (TLI.expandROT(Node, Tmp, DAG)) {
+    if (TLI.expandROT(Node, false /*AllowVectorOps*/, Tmp, DAG)) {
       Results.push_back(Tmp);
       return;
     }
@@ -801,6 +810,15 @@ void VectorLegalizer::Expand(SDNode *Node, SmallVectorImpl<SDValue> &Results) {
   case ISD::FMINNUM:
   case ISD::FMAXNUM:
     if (SDValue Expanded = TLI.expandFMINNUM_FMAXNUM(Node, DAG)) {
+      Results.push_back(Expanded);
+      return;
+    }
+    break;
+  case ISD::SMIN:
+  case ISD::SMAX:
+  case ISD::UMIN:
+  case ISD::UMAX:
+    if (SDValue Expanded = TLI.expandIntMINMAX(Node, DAG)) {
       Results.push_back(Expanded);
       return;
     }
@@ -866,6 +884,14 @@ void VectorLegalizer::Expand(SDNode *Node, SmallVectorImpl<SDValue> &Results) {
   case ISD::VECREDUCE_FMAX:
   case ISD::VECREDUCE_FMIN:
     Results.push_back(TLI.expandVecReduce(Node, DAG));
+    return;
+  case ISD::VECREDUCE_SEQ_FADD:
+  case ISD::VECREDUCE_SEQ_FMUL:
+    Results.push_back(TLI.expandVecReduceSeq(Node, DAG));
+    return;
+  case ISD::SREM:
+  case ISD::UREM:
+    ExpandREM(Node, Results);
     return;
   }
 
@@ -1351,6 +1377,17 @@ void VectorLegalizer::ExpandStrictFPOp(SDNode *Node,
   }
 
   UnrollStrictFPOp(Node, Results);
+}
+
+void VectorLegalizer::ExpandREM(SDNode *Node,
+                                SmallVectorImpl<SDValue> &Results) {
+  assert((Node->getOpcode() == ISD::SREM || Node->getOpcode() == ISD::UREM) &&
+         "Expected REM node");
+
+  SDValue Result;
+  if (!TLI.expandREM(Node, Result, DAG))
+    Result = DAG.UnrollVectorOp(Node);
+  Results.push_back(Result);
 }
 
 void VectorLegalizer::UnrollStrictFPOp(SDNode *Node,

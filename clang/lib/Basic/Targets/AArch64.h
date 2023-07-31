@@ -36,7 +36,18 @@ class LLVM_LIBRARY_VISIBILITY AArch64TargetInfo : public TargetInfo {
   bool HasFP16FML;
   bool HasMTE;
   bool HasTME;
+  bool HasPAuth;
+  bool HasLS64;
   bool HasMatMul;
+  bool HasSVE2;
+  bool HasSVE2AES;
+  bool HasSVE2SHA3;
+  bool HasSVE2SM4;
+  bool HasSVE2BitPerm;
+  bool HasMatmulFP64;
+  bool HasMatmulFP32;
+  bool HasLSE;
+  bool HasFlagM;
 
   llvm::AArch64::ArchKind ArchKind;
 
@@ -72,6 +83,8 @@ public:
   void getTargetDefinesARMV85A(const LangOptions &Opts,
                                MacroBuilder &Builder) const;
   void getTargetDefinesARMV86A(const LangOptions &Opts,
+                               MacroBuilder &Builder) const;
+  void getTargetDefinesARMV87A(const LangOptions &Opts,
                                MacroBuilder &Builder) const;
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override;

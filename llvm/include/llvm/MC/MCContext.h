@@ -22,6 +22,7 @@
 #include "llvm/BinaryFormat/XCOFF.h"
 #include "llvm/MC/MCAsmMacro.h"
 #include "llvm/MC/MCDwarf.h"
+#include "llvm/MC/MCPseudoProbe.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/SectionKind.h"
@@ -57,6 +58,7 @@ namespace llvm {
   class MCSymbol;
   class MCSymbolELF;
   class MCSymbolWasm;
+  class MCSymbolXCOFF;
   class SMLoc;
   class SourceMgr;
 
@@ -96,6 +98,7 @@ namespace llvm {
     SpecificBumpPtrAllocator<MCSectionMachO> MachOAllocator;
     SpecificBumpPtrAllocator<MCSectionWasm> WasmAllocator;
     SpecificBumpPtrAllocator<MCSectionXCOFF> XCOFFAllocator;
+    SpecificBumpPtrAllocator<MCInst> MCInstAllocator;
 
     /// Bindings of names to symbols.
     SymbolTable Symbols;
@@ -185,6 +188,9 @@ namespace llvm {
     /// The maximum version of dwarf that we should emit.
     uint16_t DwarfVersion = 4;
 
+    /// The format of dwarf that we emit.
+    dwarf::DwarfFormat DwarfFormat = dwarf::DWARF32;
+
     /// Honor temporary labels, this is useful for debugging semantic
     /// differences between temporary and non-temporary labels (primarily on
     /// Darwin).
@@ -193,6 +199,9 @@ namespace llvm {
 
     /// The Compile Unit ID that we are currently processing.
     unsigned DwarfCompileUnitID = 0;
+
+    /// A collection of MCPseudoProbe in the current module
+    MCPseudoProbeTable PseudoProbeTable;
 
     // Sections are differentiated by the quadruple (section_name, group_name,
     // unique_id, link_to_symbol_name). Sections sharing the same quadruple are
@@ -305,6 +314,9 @@ namespace llvm {
                                        unsigned UniqueID,
                                        const MCSymbolELF *LinkedToSym);
 
+    MCSymbolXCOFF *createXCOFFSymbolImpl(const StringMapEntry<bool> *Name,
+                                         bool IsTemporary);
+
     /// Map of currently defined macros.
     StringMap<MCAsmMacro> MacroMap;
 
@@ -373,6 +385,11 @@ namespace llvm {
 
     /// @}
 
+    /// \name McInst Management
+
+    /// Create and return a new MC instruction.
+    MCInst *createMCInst();
+
     /// \name Symbol Management
     /// @{
 
@@ -380,12 +397,16 @@ namespace llvm {
     /// unspecified name.
     MCSymbol *createLinkerPrivateTempSymbol();
 
-    /// Create and return a new assembler temporary symbol with a unique but
-    /// unspecified name.
-    MCSymbol *createTempSymbol(bool CanBeUnnamed = true);
+    /// Create a temporary symbol with a unique name. The name will be omitted
+    /// in the symbol table if UseNamesOnTempLabels is false (default except
+    /// MCAsmStreamer). The overload without Name uses an unspecified name.
+    MCSymbol *createTempSymbol();
+    MCSymbol *createTempSymbol(const Twine &Name, bool AlwaysAddSuffix = true);
 
-    MCSymbol *createTempSymbol(const Twine &Name, bool AlwaysAddSuffix,
-                               bool CanBeUnnamed = true);
+    /// Create a temporary symbol with a unique name whose name cannot be
+    /// omitted in the symbol table. This is rarely used.
+    MCSymbol *createNamedTempSymbol();
+    MCSymbol *createNamedTempSymbol(const Twine &Name);
 
     /// Create the definition of a directional local symbol for numbered label
     /// (used for "1:" definitions).
@@ -551,9 +572,8 @@ namespace llvm {
 
     MCSectionXCOFF *getXCOFFSection(StringRef Section,
                                     XCOFF::StorageMappingClass MappingClass,
-                                    XCOFF::SymbolType CSectType,
-                                    XCOFF::StorageClass StorageClass,
-                                    SectionKind K,
+                                    XCOFF::SymbolType CSectType, SectionKind K,
+                                    bool MultiSymbolsAllowed = false,
                                     const char *BeginSymName = nullptr);
 
     // Create and save a copy of STI and return a reference to the copy.
@@ -694,10 +714,8 @@ namespace llvm {
     void setDwarfDebugProducer(StringRef S) { DwarfDebugProducer = S; }
     StringRef getDwarfDebugProducer() { return DwarfDebugProducer; }
 
-    dwarf::DwarfFormat getDwarfFormat() const {
-      // TODO: Support DWARF64
-      return dwarf::DWARF32;
-    }
+    void setDwarfFormat(dwarf::DwarfFormat f) { DwarfFormat = f; }
+    dwarf::DwarfFormat getDwarfFormat() const { return DwarfFormat; }
 
     void setDwarfVersion(uint16_t v) { DwarfVersion = v; }
     uint16_t getDwarfVersion() const { return DwarfVersion; }
@@ -739,6 +757,8 @@ namespace llvm {
     }
 
     void undefineMacro(StringRef Name) { MacroMap.erase(Name); }
+
+    MCPseudoProbeTable &getMCPseudoProbeTable() { return PseudoProbeTable; }
   };
 
 } // end namespace llvm

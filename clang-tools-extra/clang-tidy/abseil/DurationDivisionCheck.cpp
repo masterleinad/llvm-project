@@ -9,6 +9,7 @@
 #include "DurationDivisionCheck.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
+#include "clang/Lex/Lexer.h"
 
 namespace clang {
 namespace tidy {
@@ -20,7 +21,7 @@ void DurationDivisionCheck::registerMatchers(MatchFinder *finder) {
   const auto DurationExpr =
       expr(hasType(cxxRecordDecl(hasName("::absl::Duration"))));
   finder->addMatcher(
-      traverse(ast_type_traits::TK_AsIs,
+      traverse(TK_AsIs,
                implicitCastExpr(
                    hasSourceExpression(ignoringParenCasts(
                        cxxOperatorCallExpr(hasOverloadedOperatorName("/"),

@@ -30,13 +30,10 @@ class DefaultTargetInfo(object):
     def is_darwin(self):
         return self.platform() == 'darwin'
 
+    def add_cxx_flags(self, flags): pass
     def add_cxx_compile_flags(self, flags): pass
     def add_cxx_link_flags(self, flags): pass
     def allow_cxxabi_link(self): return True
-    def use_lit_shell_default(self): return False
-
-    def add_platform_features(self, features):
-        features.add(self.platform())
 
     def add_path(self, dest_env, new_path):
         if not new_path:
@@ -77,34 +74,8 @@ class DarwinLocalTI(DefaultTargetInfo):
 
         return re.sub(r'.*/[^0-9]+([0-9.]+)\.sdk', r'\1', out)
 
-    def get_platform(self):
-        platform = self.full_config.get_lit_conf('platform')
-        if platform:
-            platform = re.sub(r'([^0-9]+)([0-9\.]*)', r'\1-\2', platform)
-            name, version = tuple(platform.split('-', 1))
-        else:
-            name = 'macosx'
-            version = None
-
-        if version:
-            return (False, name, version)
-
-        # Infer the version, either from the SDK or the system itself.  For
-        # macosx, ignore the SDK version; what matters is what's at
-        # /usr/lib/libc++.dylib.
-        if name == 'macosx':
-            version = self.get_macosx_version()
-        else:
-            version = self.get_sdk_version(name)
-        return (True, name, version)
-
-    def add_cxx_compile_flags(self, flags):
-        if self.full_config.use_deployment:
-            _, name, _ = self.full_config.config.deployment
-            cmd = ['xcrun', '--sdk', name, '--show-sdk-path']
-        else:
-            cmd = ['xcrun', '--show-sdk-path']
-        out, err, exit_code = executeCommand(cmd)
+    def add_cxx_flags(self, flags):
+        out, err, exit_code = executeCommand(['xcrun', '--show-sdk-path'])
         if exit_code != 0:
             self.full_config.lit_config.warning("Could not determine macOS SDK path! stderr was " + err)
         if exit_code == 0 and out:
@@ -168,19 +139,6 @@ class LinuxLocalTI(DefaultTargetInfo):
         ver = ver.lower().strip().replace(' ', '-')
         return ver # Permitted to be None.
 
-    def add_platform_features(self, features):
-        super(LinuxLocalTI, self).add_platform_features(features)
-
-        # Some linux distributions have different locale data than others.
-        # Insert the distributions name and name-version into the available
-        # features to allow tests to XFAIL on them.
-        name = self.platform_name()
-        ver = self.platform_ver()
-        if name:
-            features.add(name)
-        if name and ver:
-            features.add('%s-%s' % (name, ver))
-
     def add_cxx_compile_flags(self, flags):
         flags += ['-D__STDC_FORMAT_MACROS',
                   '-D__STDC_LIMIT_MACROS',
@@ -225,12 +183,6 @@ class LinuxRemoteTI(LinuxLocalTI):
 class WindowsLocalTI(DefaultTargetInfo):
     def __init__(self, full_config):
         super(WindowsLocalTI, self).__init__(full_config)
-
-    def use_lit_shell_default(self):
-        # Default to the internal shell on Windows, as bash on Windows is
-        # usually very slow.
-        return True
-
 
 def make_target_info(full_config):
     default = "libcxx.test.target_info.LocalTI"

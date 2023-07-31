@@ -20,11 +20,12 @@ class AffineApplyOp;
 class AffineForOp;
 class AffineMap;
 class Location;
-class MemRefType;
 class OpBuilder;
 class Operation;
+class ShapedType;
 class Value;
 class VectorType;
+class VectorTransferOpInterface;
 
 /// Return the number of elements of basis, `0` if empty.
 int64_t computeMaxLinearIndex(ArrayRef<int64_t> basis);
@@ -153,6 +154,23 @@ AffineMap
 makePermutationMap(Operation *op, ArrayRef<Value> indices,
                    const DenseMap<Operation *, unsigned> &loopToVectorDim);
 
+/// Build the default minor identity map suitable for a vector transfer. This
+/// also handles the case memref<... x vector<...>> -> vector<...> in which the
+/// rank of the identity map must take the vector element type into account.
+AffineMap getTransferMinorIdentityMap(ShapedType shapedType,
+                                      VectorType vectorType);
+
+/// Return true if we can prove that the transfer operations access disjoint
+/// memory.
+bool isDisjointTransferSet(VectorTransferOpInterface transferA,
+                           VectorTransferOpInterface transferB);
+
+/// Same behavior as `isDisjointTransferSet` but doesn't require the operations
+/// to have the same tensor/memref. This allows comparing operations accessing
+/// different tensors.
+bool isDisjointTransferIndices(VectorTransferOpInterface transferA,
+                               VectorTransferOpInterface transferB);
+
 namespace matcher {
 
 /// Matches vector.transfer_read, vector.transfer_write and ops that return a
@@ -160,9 +178,9 @@ namespace matcher {
 /// over other smaller vector types in the function and avoids interfering with
 /// operations on those.
 /// This is a first approximation, it can easily be extended in the future.
-/// TODO(ntv): this could all be much simpler if we added a bit that a vector
-/// type to mark that a vector is a strict super-vector but it still does not
-/// warrant adding even 1 extra bit in the IR for now.
+/// TODO: this could all be much simpler if we added a bit that a vector type to
+/// mark that a vector is a strict super-vector but it still does not warrant
+/// adding even 1 extra bit in the IR for now.
 bool operatesOnSuperVectorsOf(Operation &op, VectorType subVectorType);
 
 } // end namespace matcher

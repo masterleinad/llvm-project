@@ -9,11 +9,13 @@
 #ifndef LLVM_CLANG_TOOLS_EXTRA_CLANGD_TUSCHEDULER_H
 #define LLVM_CLANG_TOOLS_EXTRA_CLANGD_TUSCHEDULER_H
 
+#include "ASTSignals.h"
 #include "Compiler.h"
 #include "Diagnostics.h"
 #include "GlobalCompilationDatabase.h"
 #include "index/CanonicalIncludes.h"
 #include "support/Function.h"
+#include "support/MemoryTree.h"
 #include "support/Path.h"
 #include "support/Threading.h"
 #include "llvm/ADT/Optional.h"
@@ -42,6 +44,8 @@ struct InputsAndPreamble {
   const tooling::CompileCommand &Command;
   // This can be nullptr if no preamble is available.
   const PreambleData *Preamble;
+  // This can be nullptr if no ASTSignals are available.
+  const ASTSignals *Signals;
 };
 
 /// Determines whether diagnostics should be generated for a file snapshot.
@@ -194,7 +198,12 @@ public:
 
     /// Whether to run PreamblePeer asynchronously.
     /// No-op if AsyncThreadsCount is 0.
-    bool AsyncPreambleBuilds = false;
+    bool AsyncPreambleBuilds = true;
+
+    /// Used to create a context that wraps each single operation.
+    /// Typically to inject per-file configuration.
+    /// If the path is empty, context sholud be "generic".
+    std::function<Context(PathRef)> ContextProvider;
   };
 
   TUScheduler(const GlobalCompilationDatabase &CDB, const Options &Opts,
@@ -202,7 +211,8 @@ public:
   ~TUScheduler();
 
   struct FileStats {
-    std::size_t UsedBytes = 0;
+    std::size_t UsedBytesAST = 0;
+    std::size_t UsedBytesPreamble = 0;
     unsigned PreambleBuilds = 0;
     unsigned ASTBuilds = 0;
   };
@@ -233,7 +243,16 @@ public:
   llvm::StringMap<std::string> getAllFileContents() const;
 
   /// Schedule an async task with no dependencies.
-  void run(llvm::StringRef Name, llvm::unique_function<void()> Action);
+  /// Path may be empty (it is used only to set the Context).
+  void run(llvm::StringRef Name, llvm::StringRef Path,
+           llvm::unique_function<void()> Action);
+
+  /// Similar to run, except the task is expected to be quick.
+  /// This function will not honor AsyncThreadsCount (except
+  /// if threading is disabled with AsyncThreadsCount=0)
+  /// It is intended to run quick tasks that need to run ASAP
+  void runQuick(llvm::StringRef Name, llvm::StringRef Path,
+                llvm::unique_function<void()> Action);
 
   /// Defines how a runWithAST action is implicitly cancelled by other actions.
   enum ASTActionInvalidation {
@@ -301,13 +320,20 @@ public:
   // this inside clangd.
   // FIXME: remove this when there is proper index support via build system
   // integration.
+  // FIXME: move to ClangdServer via createProcessingContext.
   static llvm::Optional<llvm::StringRef> getFileBeingProcessedInContext();
 
+  void profile(MemoryTree &MT) const;
+
 private:
+  void runWithSemaphore(llvm::StringRef Name, llvm::StringRef Path,
+                        llvm::unique_function<void()> Action, Semaphore &Sem);
+
   const GlobalCompilationDatabase &CDB;
-  const Options Opts;
+  Options Opts;
   std::unique_ptr<ParsingCallbacks> Callbacks; // not nullptr
   Semaphore Barrier;
+  Semaphore QuickRunBarrier;
   llvm::StringMap<std::unique_ptr<FileData>> Files;
   std::unique_ptr<ASTCache> IdleASTs;
   // None when running tasks synchronously and non-None when running tasks

@@ -50,9 +50,6 @@ enum NodeType : unsigned {
   // as a register base.
   PCREL_OFFSET,
 
-  // Integer absolute.
-  IABS,
-
   // Integer comparisons.  There are three operands: the two values
   // to compare, and an integer of type SystemZICMP.
   ICMP,
@@ -627,8 +624,8 @@ private:
   SDValue lowerSCALAR_TO_VECTOR(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerINSERT_VECTOR_ELT(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerEXTRACT_VECTOR_ELT(SDValue Op, SelectionDAG &DAG) const;
-  SDValue lowerExtendVectorInreg(SDValue Op, SelectionDAG &DAG,
-                                 unsigned UnpackHigh) const;
+  SDValue lowerSIGN_EXTEND_VECTOR_INREG(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerZERO_EXTEND_VECTOR_INREG(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerShift(SDValue Op, SelectionDAG &DAG, unsigned ByScalar) const;
 
   bool canTreatAsByteVector(EVT VT) const;
@@ -700,6 +697,8 @@ private:
                                          unsigned Opcode) const;
   MachineBasicBlock *emitProbedAlloca(MachineInstr &MI,
                                       MachineBasicBlock *MBB) const;
+
+  SDValue getBackchainAddress(SDValue SP, SelectionDAG &DAG) const;
 
   MachineMemOperand::Flags
   getTargetMMOFlags(const Instruction &I) const override;

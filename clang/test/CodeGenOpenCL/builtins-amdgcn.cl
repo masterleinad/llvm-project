@@ -116,6 +116,20 @@ void test_rcp_f64(global double* out, double a)
   *out = __builtin_amdgcn_rcp(a);
 }
 
+// CHECK-LABEL: @test_sqrt_f32
+// CHECK: call float @llvm.amdgcn.sqrt.f32
+void test_sqrt_f32(global float* out, float a)
+{
+  *out = __builtin_amdgcn_sqrtf(a);
+}
+
+// CHECK-LABEL: @test_sqrt_f64
+// CHECK: call double @llvm.amdgcn.sqrt.f64
+void test_sqrt_f64(global double* out, double a)
+{
+  *out = __builtin_amdgcn_sqrt(a);
+}
+
 // CHECK-LABEL: @test_rsq_f32
 // CHECK: call float @llvm.amdgcn.rsq.f32
 void test_rsq_f32(global float* out, float a)
@@ -541,6 +555,24 @@ void test_get_workgroup_size(int d, global int *out)
 	case 0: *out = __builtin_amdgcn_workgroup_size_x() + 1; break;
 	case 1: *out = __builtin_amdgcn_workgroup_size_y(); break;
 	case 2: *out = __builtin_amdgcn_workgroup_size_z(); break;
+	default: *out = 0;
+	}
+}
+
+// CHECK-LABEL: @test_get_grid_size(
+// CHECK: call align 4 dereferenceable(64) i8 addrspace(4)* @llvm.amdgcn.dispatch.ptr()
+// CHECK: getelementptr i8, i8 addrspace(4)* %{{.*}}, i64 12
+// CHECK: load i32, i32 addrspace(4)* %{{.*}}, align 4, !invariant.load
+// CHECK: getelementptr i8, i8 addrspace(4)* %{{.*}}, i64 16
+// CHECK: load i32, i32 addrspace(4)* %{{.*}}, align 4, !invariant.load
+// CHECK: getelementptr i8, i8 addrspace(4)* %{{.*}}, i64 20
+// CHECK: load i32, i32 addrspace(4)* %{{.*}}, align 4, !invariant.load
+void test_get_grid_size(int d, global int *out)
+{
+	switch (d) {
+	case 0: *out = __builtin_amdgcn_grid_size_x(); break;
+	case 1: *out = __builtin_amdgcn_grid_size_y(); break;
+	case 2: *out = __builtin_amdgcn_grid_size_z(); break;
 	default: *out = 0;
 	}
 }

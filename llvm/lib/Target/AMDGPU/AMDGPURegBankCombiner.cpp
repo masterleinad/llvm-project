@@ -11,19 +11,17 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "AMDGPUTargetMachine.h"
+#include "AMDGPU.h"
 #include "AMDGPULegalizerInfo.h"
+#include "GCNSubtarget.h"
 #include "llvm/CodeGen/GlobalISel/Combiner.h"
 #include "llvm/CodeGen/GlobalISel/CombinerHelper.h"
 #include "llvm/CodeGen/GlobalISel/CombinerInfo.h"
 #include "llvm/CodeGen/GlobalISel/GISelKnownBits.h"
 #include "llvm/CodeGen/GlobalISel/MIPatternMatch.h"
 #include "llvm/CodeGen/MachineDominators.h"
-#include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
-#include "llvm/Support/Debug.h"
-#include "MCTargetDesc/AMDGPUMCTargetDesc.h"
-
+#include "llvm/Target/TargetMachine.h"
 #define DEBUG_TYPE "amdgpu-regbank-combiner"
 
 using namespace llvm;
@@ -39,12 +37,12 @@ namespace {
 #include "AMDGPUGenRegBankGICombiner.inc"
 #undef AMDGPUREGBANKCOMBINERHELPER_GENCOMBINERHELPER_H
 
-class AMDGPURegBankCombinerInfo : public CombinerInfo {
+class AMDGPURegBankCombinerInfo final : public CombinerInfo {
   GISelKnownBits *KB;
   MachineDominatorTree *MDT;
 
 public:
-  AMDGPUGenRegBankCombinerHelper Generated;
+  AMDGPUGenRegBankCombinerHelperRuleConfig GeneratedRuleCfg;
 
   AMDGPURegBankCombinerInfo(bool EnableOpt, bool OptSize, bool MinSize,
                                   const AMDGPULegalizerInfo *LI,
@@ -52,7 +50,7 @@ public:
       : CombinerInfo(/*AllowIllegalOps*/ false, /*ShouldLegalizeIllegal*/ true,
                      /*LegalizerInfo*/ LI, EnableOpt, OptSize, MinSize),
         KB(KB), MDT(MDT) {
-    if (!Generated.parseCommandLineOption())
+    if (!GeneratedRuleCfg.parseCommandLineOption())
       report_fatal_error("Invalid rule identifier");
   }
 
@@ -64,6 +62,7 @@ bool AMDGPURegBankCombinerInfo::combine(GISelChangeObserver &Observer,
                                               MachineInstr &MI,
                                               MachineIRBuilder &B) const {
   CombinerHelper Helper(Observer, B, KB, MDT);
+  AMDGPUGenRegBankCombinerHelper Generated(GeneratedRuleCfg);
 
   if (Generated.tryCombineAll(Observer, MI, B, Helper))
     return true;

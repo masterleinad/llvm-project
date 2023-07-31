@@ -463,10 +463,7 @@ bool IfConverter::runOnMachineFunction(MachineFunction &MF) {
   if (!PreRegAlloc) {
     // Tail merge tend to expose more if-conversion opportunities.
     BranchFolder BF(true, false, MBFI, *MBPI, PSI);
-    auto *MMIWP = getAnalysisIfAvailable<MachineModuleInfoWrapperPass>();
-    BFChange = BF.OptimizeFunction(
-        MF, TII, ST.getRegisterInfo(),
-        MMIWP ? &MMIWP->getMMI() : nullptr);
+    BFChange = BF.OptimizeFunction(MF, TII, ST.getRegisterInfo());
   }
 
   LLVM_DEBUG(dbgs() << "\nIfcvt: function (" << ++FnNum << ") \'"
@@ -605,10 +602,7 @@ bool IfConverter::runOnMachineFunction(MachineFunction &MF) {
 
   if (MadeChange && IfCvtBranchFold) {
     BranchFolder BF(false, false, MBFI, *MBPI, PSI);
-    auto *MMIWP = getAnalysisIfAvailable<MachineModuleInfoWrapperPass>();
-    BF.OptimizeFunction(
-        MF, TII, MF.getSubtarget().getRegisterInfo(),
-        MMIWP ? &MMIWP->getMMI() : nullptr);
+    BF.OptimizeFunction(MF, TII, MF.getSubtarget().getRegisterInfo());
   }
 
   MadeChange |= BFChange;
@@ -757,7 +751,7 @@ bool IfConverter::CountDuplicatedInstructions(
     // A pred-clobbering instruction in the shared portion prevents
     // if-conversion.
     std::vector<MachineOperand> PredDefs;
-    if (TII->DefinesPredicate(*TIB, PredDefs))
+    if (TII->ClobbersPredicate(*TIB, PredDefs, false))
       return false;
     // If we get all the way to the branch instructions, don't count them.
     if (!TIB->isBranch())
@@ -1152,7 +1146,7 @@ void IfConverter::ScanInstructions(BBInfo &BBI,
     // FIXME: Make use of PredDefs? e.g. ADDC, SUBC sets predicates but are
     // still potentially predicable.
     std::vector<MachineOperand> PredDefs;
-    if (TII->DefinesPredicate(MI, PredDefs))
+    if (TII->ClobbersPredicate(MI, PredDefs, true))
       BBI.ClobbersPred = true;
 
     if (!TII->isPredicable(MI)) {
@@ -2270,8 +2264,7 @@ void IfConverter::MergeBlocks(BBInfo &ToBBI, BBInfo &FromBBI, bool AddEdges) {
   if (ToBBI.IsBrAnalyzable)
     ToBBI.BB->normalizeSuccProbs();
 
-  SmallVector<MachineBasicBlock *, 4> FromSuccs(FromMBB.succ_begin(),
-                                                FromMBB.succ_end());
+  SmallVector<MachineBasicBlock *, 4> FromSuccs(FromMBB.successors());
   MachineBasicBlock *NBB = getNextBlock(FromMBB);
   MachineBasicBlock *FallThrough = FromBBI.HasFallThrough ? NBB : nullptr;
   // The edge probability from ToBBI.BB to FromMBB, which is only needed when

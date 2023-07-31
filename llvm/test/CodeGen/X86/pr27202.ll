@@ -14,12 +14,27 @@ define i1 @foo(i32 %i) optsize {
   ret i1 %cmp
 }
 
+define i1 @foo_pgso(i32 %i) !prof !14 {
+; CHECK-LABEL: foo_pgso:
+; CHECK:       # %bb.0:
+; CHECK-NEXT:    movl $305419896, %eax # imm = 0x12345678
+; CHECK-NEXT:    andl %eax, %edi
+; CHECK-NEXT:    cmpl %eax, %edi
+; CHECK-NEXT:    sete %al
+; CHECK-NEXT:    retq
+  %and = and i32 %i, 305419896
+  %cmp = icmp eq i32 %and, 305419896
+  ret i1 %cmp
+}
+
+; 8-bit ALU immediates probably have small encodings.
+; We do not want to hoist the constant into a register here.
+
 define zeroext i1 @g(i32 %x) optsize {
 ; CHECK-LABEL: g:
 ; CHECK:       # %bb.0:
-; CHECK-NEXT:    movl $1, %eax
-; CHECK-NEXT:    orl %eax, %edi
-; CHECK-NEXT:    cmpl %eax, %edi
+; CHECK-NEXT:    orl $1, %edi
+; CHECK-NEXT:    cmpl $1, %edi
 ; CHECK-NEXT:    sete %al
 ; CHECK-NEXT:    retq
   %t0 = or i32 %x, 1
@@ -27,7 +42,7 @@ define zeroext i1 @g(i32 %x) optsize {
   ret i1 %t1
 }
 
-; 8-bit immediates probably have small encodings.
+; 8-bit ALU immediates probably have small encodings.
 ; We do not want to hoist the constant into a register here.
 
 define i64 @PR46237(i64 %x, i64 %y, i64 %z) optsize {
@@ -36,9 +51,8 @@ define i64 @PR46237(i64 %x, i64 %y, i64 %z) optsize {
 ; CHECK-NEXT:    movl %edx, %eax
 ; CHECK-NEXT:    shll $6, %eax
 ; CHECK-NEXT:    movzbl %al, %ecx
-; CHECK-NEXT:    movl $7, %eax
-; CHECK-NEXT:    andq %rax, %rsi
-; CHECK-NEXT:    andq %rax, %rdx
+; CHECK-NEXT:    andl $7, %esi
+; CHECK-NEXT:    andl $7, %edx
 ; CHECK-NEXT:    leaq (%rdx,%rsi,8), %rax
 ; CHECK-NEXT:    orq %rcx, %rax
 ; CHECK-NEXT:    retq
@@ -51,3 +65,20 @@ define i64 @PR46237(i64 %x, i64 %y, i64 %z) optsize {
   %or4 = or i64 %or, %shl
   ret i64 %or4
 }
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"ProfileSummary", !1}
+!1 = !{!2, !3, !4, !5, !6, !7, !8, !9}
+!2 = !{!"ProfileFormat", !"InstrProf"}
+!3 = !{!"TotalCount", i64 10000}
+!4 = !{!"MaxCount", i64 10}
+!5 = !{!"MaxInternalCount", i64 1}
+!6 = !{!"MaxFunctionCount", i64 1000}
+!7 = !{!"NumCounts", i64 3}
+!8 = !{!"NumFunctions", i64 3}
+!9 = !{!"DetailedSummary", !10}
+!10 = !{!11, !12, !13}
+!11 = !{i32 10000, i64 100, i32 1}
+!12 = !{i32 999000, i64 100, i32 1}
+!13 = !{i32 999999, i64 1, i32 2}
+!14 = !{!"function_entry_count", i64 0}

@@ -63,7 +63,7 @@ The affine dialect imposes certain restrictions on dimension and symbolic
 identifiers to enable powerful analysis and transformation. An SSA value's use
 can be bound to a symbolic identifier if that SSA value is either
 1. a region argument for an op with trait `AffineScope` (eg. `FuncOp`),
-2. a value defined at the top level of a `AffineScope` op (i.e., immediately
+2. a value defined at the top level of an `AffineScope` op (i.e., immediately
 enclosed by the latter),
 3. a value that dominates the `AffineScope` op enclosing the value's use,
 4. the result of a [`constant` operation](Standard.md#constant-operation),
@@ -74,6 +74,8 @@ symbolic identifiers, or
 memref that is an argument to a `AffineScope` op or a memref where the
 corresponding dimension is either static or a dynamic one in turn bound to a
 valid symbol.
+*Note:* if the use of an SSA value is not contained in any op with the
+`AffineScope` trait, only the rules 4-6 can be applied.
 
 Note that as a result of rule (3) above, symbol validity is sensitive to the
 location of the SSA use.  Dimensions may be bound not only to anything that a
@@ -122,19 +124,19 @@ one-dimensional affine expressions, with the entire list enclosed in
 parentheses.
 
 **Context:** An affine function, informally, is a linear function plus a
-constant. More formally, a function f defined on a vector $$\vec{v} \in
-\mathbb{Z}^n$$ is a multidimensional affine function of $$\vec{v}$$ if
-$$f(\vec{v})$$ can be expressed in the form $$M \vec{v} + \vec{c}$$ where $$M$$
-is a constant matrix from $$\mathbb{Z}^{m \times n}$$ and $$\vec{c}$$ is a
-constant vector from $$\mathbb{Z}$$. $$m$$ is the dimensionality of such an
+constant. More formally, a function f defined on a vector $\vec{v} \in
+\mathbb{Z}^n$ is a multidimensional affine function of $\vec{v}$ if
+$f(\vec{v})$ can be expressed in the form $M \vec{v} + \vec{c}$ where $M$
+is a constant matrix from $\mathbb{Z}^{m \times n}$ and $\vec{c}$ is a
+constant vector from $\mathbb{Z}$. $m$ is the dimensionality of such an
 affine function. MLIR further extends the definition of an affine function to
 allow 'floordiv', 'ceildiv', and 'mod' with respect to positive integer
 constants. Such extensions to affine functions have often been referred to as
 quasi-affine functions by the polyhedral compiler community. MLIR uses the term
 'affine map' to refer to these multidimensional quasi-affine functions. As
-examples, $$(i+j+1, j)$$, $$(i \mod 2, j+i)$$, $$(j, i/4, i \mod 4)$$, $$(2i+1,
-j)$$ are two-dimensional affine functions of $$(i, j)$$, but $$(i \cdot j,
-i^2)$$, $$(i \mod j, i/j)$$ are not affine functions of $$(i, j)$$.
+examples, $(i+j+1, j)$, $(i \mod 2, j+i)$, $(j, i/4, i \mod 4)$, $(2i+1,
+j)$ are two-dimensional affine functions of $(i, j)$, but $(i \cdot j,
+i^2)$, $(i \mod j, i/j)$ are not affine functions of $(i, j)$.
 
 ### Affine Maps
 

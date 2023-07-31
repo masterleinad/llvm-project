@@ -96,8 +96,8 @@ struct NoAutoPaddingScope {
 };
 
 // Emit a minimal sequence of nops spanning NumBytes bytes.
-static void EmitNops(MCStreamer &OS, unsigned NumBytes, bool Is64Bit,
-                     const MCSubtargetInfo &STI);
+static void emitX86Nops(MCStreamer &OS, unsigned NumBytes,
+                        const X86Subtarget *Subtarget);
 
 void X86AsmPrinter::StackMapShadowTracker::count(MCInst &Inst,
                                                  const MCSubtargetInfo &STI,
@@ -117,8 +117,8 @@ void X86AsmPrinter::StackMapShadowTracker::emitShadowPadding(
     MCStreamer &OutStreamer, const MCSubtargetInfo &STI) {
   if (InShadow && CurrentShadowSize < RequiredShadowSize) {
     InShadow = false;
-    EmitNops(OutStreamer, RequiredShadowSize - CurrentShadowSize,
-             MF->getSubtarget<X86Subtarget>().is64Bit(), STI);
+    emitX86Nops(OutStreamer, RequiredShadowSize - CurrentShadowSize,
+                &MF->getSubtarget<X86Subtarget>());
   }
 }
 
@@ -518,7 +518,7 @@ void X86MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     switch (OutMI.getOpcode()) {
     default: llvm_unreachable("Invalid opcode");
     case X86::MULX32Hrr: NewOpc = X86::MULX32rr; break;
-    case X86::MULX32Hrm: NewOpc = X86::MULX32rr; break;
+    case X86::MULX32Hrm: NewOpc = X86::MULX32rm; break;
     case X86::MULX64Hrr: NewOpc = X86::MULX64rr; break;
     case X86::MULX64Hrm: NewOpc = X86::MULX64rm; break;
     }
@@ -977,20 +977,24 @@ void X86MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
 void X86AsmPrinter::LowerTlsAddr(X86MCInstLower &MCInstLowering,
                                  const MachineInstr &MI) {
   NoAutoPaddingScope NoPadScope(*OutStreamer);
-  bool Is64Bits = MI.getOpcode() == X86::TLS_addr64 ||
-                  MI.getOpcode() == X86::TLS_base_addr64;
+  bool Is64Bits = MI.getOpcode() != X86::TLS_addr32 &&
+                  MI.getOpcode() != X86::TLS_base_addr32;
+  bool Is64BitsLP64 = MI.getOpcode() == X86::TLS_addr64 ||
+                      MI.getOpcode() == X86::TLS_base_addr64;
   MCContext &Ctx = OutStreamer->getContext();
 
   MCSymbolRefExpr::VariantKind SRVK;
   switch (MI.getOpcode()) {
   case X86::TLS_addr32:
   case X86::TLS_addr64:
+  case X86::TLS_addrX32:
     SRVK = MCSymbolRefExpr::VK_TLSGD;
     break;
   case X86::TLS_base_addr32:
     SRVK = MCSymbolRefExpr::VK_TLSLDM;
     break;
   case X86::TLS_base_addr64:
+  case X86::TLS_base_addrX32:
     SRVK = MCSymbolRefExpr::VK_TLSLD;
     break;
   default:
@@ -1010,7 +1014,7 @@ void X86AsmPrinter::LowerTlsAddr(X86MCInstLower &MCInstLowering,
 
   if (Is64Bits) {
     bool NeedsPadding = SRVK == MCSymbolRefExpr::VK_TLSGD;
-    if (NeedsPadding)
+    if (NeedsPadding && Is64BitsLP64)
       EmitAndCountInstruction(MCInstBuilder(X86::DATA16_PREFIX));
     EmitAndCountInstruction(MCInstBuilder(X86::LEA64r)
                                 .addReg(X86::RDI)
@@ -1079,32 +1083,30 @@ void X86AsmPrinter::LowerTlsAddr(X86MCInstLower &MCInstLowering,
   }
 }
 
-/// Return the longest nop which can be efficiently decoded for the given
-/// target cpu.  15-bytes is the longest single NOP instruction, but some
-/// platforms can't decode the longest forms efficiently.
-static unsigned MaxLongNopLength(const MCSubtargetInfo &STI) {
-  uint64_t MaxNopLength = 10;
-  if (STI.getFeatureBits()[X86::ProcIntelSLM])
-    MaxNopLength = 7;
-  else if (STI.getFeatureBits()[X86::FeatureFast15ByteNOP])
-    MaxNopLength = 15;
-  else if (STI.getFeatureBits()[X86::FeatureFast11ByteNOP])
-    MaxNopLength = 11;
-  return MaxNopLength;
-}
-
 /// Emit the largest nop instruction smaller than or equal to \p NumBytes
 /// bytes.  Return the size of nop emitted.
-static unsigned EmitNop(MCStreamer &OS, unsigned NumBytes, bool Is64Bit,
-                        const MCSubtargetInfo &STI) {
-  if (!Is64Bit) {
-    // TODO Do additional checking if the CPU supports multi-byte nops.
-    OS.emitInstruction(MCInstBuilder(X86::NOOP), STI);
-    return 1;
-  }
+static unsigned emitNop(MCStreamer &OS, unsigned NumBytes,
+                        const X86Subtarget *Subtarget) {
+  // Determine the longest nop which can be efficiently decoded for the given
+  // target cpu.  15-bytes is the longest single NOP instruction, but some
+  // platforms can't decode the longest forms efficiently.
+  unsigned MaxNopLength = 1;
+  if (Subtarget->is64Bit()) {
+    // FIXME: We can use NOOPL on 32-bit targets with FeatureNOPL, but the
+    // IndexReg/BaseReg below need to be updated.
+    if (Subtarget->hasFeature(X86::FeatureFast7ByteNOP))
+      MaxNopLength = 7;
+    else if (Subtarget->hasFeature(X86::FeatureFast15ByteNOP))
+      MaxNopLength = 15;
+    else if (Subtarget->hasFeature(X86::FeatureFast11ByteNOP))
+      MaxNopLength = 11;
+    else
+      MaxNopLength = 10;
+  } if (Subtarget->is32Bit())
+    MaxNopLength = 2;
 
   // Cap a single nop emission at the profitable value for the target
-  NumBytes = std::min(NumBytes, MaxLongNopLength(STI));
+  NumBytes = std::min(NumBytes, MaxNopLength);
 
   unsigned NopSize;
   unsigned Opc, BaseReg, ScaleVal, IndexReg, Displacement, SegmentReg;
@@ -1178,10 +1180,11 @@ static unsigned EmitNop(MCStreamer &OS, unsigned NumBytes, bool Is64Bit,
   switch (Opc) {
   default: llvm_unreachable("Unexpected opcode");
   case X86::NOOP:
-    OS.emitInstruction(MCInstBuilder(Opc), STI);
+    OS.emitInstruction(MCInstBuilder(Opc), *Subtarget);
     break;
   case X86::XCHG16ar:
-    OS.emitInstruction(MCInstBuilder(Opc).addReg(X86::AX).addReg(X86::AX), STI);
+    OS.emitInstruction(MCInstBuilder(Opc).addReg(X86::AX).addReg(X86::AX),
+                       *Subtarget);
     break;
   case X86::NOOPL:
   case X86::NOOPW:
@@ -1191,7 +1194,7 @@ static unsigned EmitNop(MCStreamer &OS, unsigned NumBytes, bool Is64Bit,
                            .addReg(IndexReg)
                            .addImm(Displacement)
                            .addReg(SegmentReg),
-                       STI);
+                       *Subtarget);
     break;
   }
   assert(NopSize <= NumBytes && "We overemitted?");
@@ -1199,12 +1202,12 @@ static unsigned EmitNop(MCStreamer &OS, unsigned NumBytes, bool Is64Bit,
 }
 
 /// Emit the optimal amount of multi-byte nops on X86.
-static void EmitNops(MCStreamer &OS, unsigned NumBytes, bool Is64Bit,
-                     const MCSubtargetInfo &STI) {
+static void emitX86Nops(MCStreamer &OS, unsigned NumBytes,
+                        const X86Subtarget *Subtarget) {
   unsigned NopsToEmit = NumBytes;
   (void)NopsToEmit;
   while (NumBytes) {
-    NumBytes -= EmitNop(OS, NumBytes, Is64Bit, STI);
+    NumBytes -= emitNop(OS, NumBytes, Subtarget);
     assert(NopsToEmit >= NumBytes && "Emitted more than I asked for!");
   }
 }
@@ -1217,8 +1220,7 @@ void X86AsmPrinter::LowerSTATEPOINT(const MachineInstr &MI,
 
   StatepointOpers SOpers(&MI);
   if (unsigned PatchBytes = SOpers.getNumPatchBytes()) {
-    EmitNops(*OutStreamer, PatchBytes, Subtarget->is64Bit(),
-             getSubtargetInfo());
+    emitX86Nops(*OutStreamer, PatchBytes, Subtarget);
   } else {
     // Lower call target and choose correct opcode
     const MachineOperand &CallTarget = SOpers.getCallTarget();
@@ -1332,7 +1334,7 @@ void X86AsmPrinter::LowerPATCHABLE_OP(const MachineInstr &MI,
 
   MCInst MCI;
   MCI.setOpcode(Opcode);
-  for (auto &MO : make_range(MI.operands_begin() + 2, MI.operands_end()))
+  for (auto &MO : drop_begin(MI.operands(), 2))
     if (auto MaybeOperand = MCIL.LowerMachineOperand(&MI, MO))
       MCI.addOperand(MaybeOperand.getValue());
 
@@ -1342,7 +1344,17 @@ void X86AsmPrinter::LowerPATCHABLE_OP(const MachineInstr &MI,
   CodeEmitter->encodeInstruction(MCI, VecOS, Fixups, getSubtargetInfo());
 
   if (Code.size() < MinSize) {
-    if (MinSize == 2 && Opcode == X86::PUSH64r) {
+    if (MinSize == 2 && Subtarget->is32Bit() &&
+        Subtarget->isTargetWindowsMSVC() &&
+        (Subtarget->getCPU().empty() || Subtarget->getCPU() == "pentium3")) {
+      // For compatibilty reasons, when targetting MSVC, is is important to
+      // generate a 'legacy' NOP in the form of a 8B FF MOV EDI, EDI. Some tools
+      // rely specifically on this pattern to be able to patch a function.
+      // This is only for 32-bit targets, when using /arch:IA32 or /arch:SSE.
+      OutStreamer->emitInstruction(
+          MCInstBuilder(X86::MOV32rr_REV).addReg(X86::EDI).addReg(X86::EDI),
+          *Subtarget);
+    } else if (MinSize == 2 && Opcode == X86::PUSH64r) {
       // This is an optimization that lets us get away without emitting a nop in
       // many cases.
       //
@@ -1350,8 +1362,7 @@ void X86AsmPrinter::LowerPATCHABLE_OP(const MachineInstr &MI,
       // bytes too, so the check on MinSize is important.
       MCI.setOpcode(X86::PUSH64rmr);
     } else {
-      unsigned NopSize = EmitNop(*OutStreamer, MinSize, Subtarget->is64Bit(),
-                                 getSubtargetInfo());
+      unsigned NopSize = emitNop(*OutStreamer, MinSize, Subtarget);
       assert(NopSize == MinSize && "Could not implement MinSize!");
       (void)NopSize;
     }
@@ -1435,8 +1446,7 @@ void X86AsmPrinter::LowerPATCHPOINT(const MachineInstr &MI,
   assert(NumBytes >= EncodedBytes &&
          "Patchpoint can't request size less than the length of a call.");
 
-  EmitNops(*OutStreamer, NumBytes - EncodedBytes, Subtarget->is64Bit(),
-           getSubtargetInfo());
+  emitX86Nops(*OutStreamer, NumBytes - EncodedBytes, Subtarget);
 }
 
 void X86AsmPrinter::LowerPATCHABLE_EVENT_CALL(const MachineInstr &MI,
@@ -1496,7 +1506,7 @@ void X86AsmPrinter::LowerPATCHABLE_EVENT_CALL(const MachineInstr &MI,
         EmitAndCountInstruction(
             MCInstBuilder(X86::PUSH64r).addReg(DestRegs[I]));
       } else {
-        EmitNops(*OutStreamer, 4, Subtarget->is64Bit(), getSubtargetInfo());
+        emitX86Nops(*OutStreamer, 4, Subtarget);
       }
     }
 
@@ -1525,7 +1535,7 @@ void X86AsmPrinter::LowerPATCHABLE_EVENT_CALL(const MachineInstr &MI,
     if (UsedMask[I])
       EmitAndCountInstruction(MCInstBuilder(X86::POP64r).addReg(DestRegs[I]));
     else
-      EmitNops(*OutStreamer, 1, Subtarget->is64Bit(), getSubtargetInfo());
+      emitX86Nops(*OutStreamer, 1, Subtarget);
 
   OutStreamer->AddComment("xray custom event end.");
 
@@ -1594,7 +1604,7 @@ void X86AsmPrinter::LowerPATCHABLE_TYPED_EVENT_CALL(const MachineInstr &MI,
         EmitAndCountInstruction(
             MCInstBuilder(X86::PUSH64r).addReg(DestRegs[I]));
       } else {
-        EmitNops(*OutStreamer, 4, Subtarget->is64Bit(), getSubtargetInfo());
+        emitX86Nops(*OutStreamer, 4, Subtarget);
       }
     }
 
@@ -1628,7 +1638,7 @@ void X86AsmPrinter::LowerPATCHABLE_TYPED_EVENT_CALL(const MachineInstr &MI,
     if (UsedMask[I])
       EmitAndCountInstruction(MCInstBuilder(X86::POP64r).addReg(DestRegs[I]));
     else
-      EmitNops(*OutStreamer, 1, Subtarget->is64Bit(), getSubtargetInfo());
+      emitX86Nops(*OutStreamer, 1, Subtarget);
 
   OutStreamer->AddComment("xray typed event end.");
 
@@ -1648,7 +1658,7 @@ void X86AsmPrinter::LowerPATCHABLE_FUNCTION_ENTER(const MachineInstr &MI,
             .getValueAsString()
             .getAsInteger(10, Num))
       return;
-    EmitNops(*OutStreamer, Num, Subtarget->is64Bit(), getSubtargetInfo());
+    emitX86Nops(*OutStreamer, Num, Subtarget);
     return;
   }
   // We want to emit the following pattern:
@@ -1672,7 +1682,7 @@ void X86AsmPrinter::LowerPATCHABLE_FUNCTION_ENTER(const MachineInstr &MI,
   // an operand (computed as an offset from the jmp instruction).
   // FIXME: Find another less hacky way do force the relative jump.
   OutStreamer->emitBytes("\xeb\x09");
-  EmitNops(*OutStreamer, 9, Subtarget->is64Bit(), getSubtargetInfo());
+  emitX86Nops(*OutStreamer, 9, Subtarget);
   recordSled(CurSled, MI, SledKind::FUNCTION_ENTER, 2);
 }
 
@@ -1700,11 +1710,11 @@ void X86AsmPrinter::LowerPATCHABLE_RET(const MachineInstr &MI,
   unsigned OpCode = MI.getOperand(0).getImm();
   MCInst Ret;
   Ret.setOpcode(OpCode);
-  for (auto &MO : make_range(MI.operands_begin() + 1, MI.operands_end()))
+  for (auto &MO : drop_begin(MI.operands()))
     if (auto MaybeOperand = MCIL.LowerMachineOperand(&MI, MO))
       Ret.addOperand(MaybeOperand.getValue());
   OutStreamer->emitInstruction(Ret, getSubtargetInfo());
-  EmitNops(*OutStreamer, 10, Subtarget->is64Bit(), getSubtargetInfo());
+  emitX86Nops(*OutStreamer, 10, Subtarget);
   recordSled(CurSled, MI, SledKind::FUNCTION_EXIT, 2);
 }
 
@@ -1727,7 +1737,7 @@ void X86AsmPrinter::LowerPATCHABLE_TAIL_CALL(const MachineInstr &MI,
   // an operand (computed as an offset from the jmp instruction).
   // FIXME: Find another less hacky way do force the relative jump.
   OutStreamer->emitBytes("\xeb\x09");
-  EmitNops(*OutStreamer, 9, Subtarget->is64Bit(), getSubtargetInfo());
+  emitX86Nops(*OutStreamer, 9, Subtarget);
   OutStreamer->emitLabel(Target);
   recordSled(CurSled, MI, SledKind::TAIL_CALL, 2);
 
@@ -1739,7 +1749,7 @@ void X86AsmPrinter::LowerPATCHABLE_TAIL_CALL(const MachineInstr &MI,
   // Before emitting the instruction, add a comment to indicate that this is
   // indeed a tail call.
   OutStreamer->AddComment("TAILCALL");
-  for (auto &MO : make_range(MI.operands_begin() + 1, MI.operands_end()))
+  for (auto &MO : drop_begin(MI.operands()))
     if (auto MaybeOperand = MCIL.LowerMachineOperand(&MI, MO))
       TC.addOperand(MaybeOperand.getValue());
   OutStreamer->emitInstruction(TC, getSubtargetInfo());
@@ -1774,10 +1784,7 @@ static const Constant *getConstantFromPool(const MachineInstr &MI,
   if (ConstantEntry.isMachineConstantPoolEntry())
     return nullptr;
 
-  const Constant *C = ConstantEntry.Val.ConstVal;
-  assert((!C || ConstantEntry.getType() == C->getType()) &&
-         "Expected a constant of the same type!");
-  return C;
+  return ConstantEntry.Val.ConstVal;
 }
 
 static std::string getShuffleComment(const MachineInstr *MI, unsigned SrcOp1Idx,
@@ -2439,8 +2446,10 @@ void X86AsmPrinter::emitInstruction(const MachineInstr *MI) {
 
   case X86::TLS_addr32:
   case X86::TLS_addr64:
+  case X86::TLS_addrX32:
   case X86::TLS_base_addr32:
   case X86::TLS_base_addr64:
+  case X86::TLS_base_addrX32:
     return LowerTlsAddr(MCInstLowering, *MI);
 
   case X86::MOVPC32r: {
@@ -2589,6 +2598,15 @@ void X86AsmPrinter::emitInstruction(const MachineInstr *MI) {
     }
     return;
   }
+  case X86::UBSAN_UD1:
+    EmitAndCountInstruction(MCInstBuilder(X86::UD1Lm)
+                                .addReg(X86::EAX)
+                                .addReg(X86::EAX)
+                                .addImm(1)
+                                .addReg(X86::NoRegister)
+                                .addImm(MI->getOperand(0).getImm())
+                                .addReg(X86::NoRegister));
+    return;
   }
 
   MCInst TmpInst;

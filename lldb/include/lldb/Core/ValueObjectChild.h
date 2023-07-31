@@ -30,7 +30,7 @@ class ValueObjectChild : public ValueObject {
 public:
   ~ValueObjectChild() override;
 
-  uint64_t GetByteSize() override { return m_byte_size; }
+  llvm::Optional<uint64_t> GetByteSize() override { return m_byte_size; }
 
   lldb::offset_t GetByteOffset() override { return m_byte_offset; }
 
@@ -75,7 +75,6 @@ protected:
   //  void
   //  ReadValueFromMemory (ValueObject* parent, lldb::addr_t address);
 
-protected:
   friend class ValueObject;
   friend class ValueObjectConstResult;
   friend class ValueObjectConstResultImpl;

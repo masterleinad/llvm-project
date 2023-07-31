@@ -14,11 +14,11 @@
 #define ATTRIBUTEDETAIL_H_
 
 #include "mlir/IR/AffineMap.h"
-#include "mlir/IR/Attributes.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Identifier.h"
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/IR/MLIRContext.h"
-#include "mlir/IR/StandardTypes.h"
 #include "mlir/Support/StorageUniquer.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/PointerIntPair.h"
@@ -84,7 +84,7 @@ struct DictionaryAttributeStorage final
   construct(AttributeStorageAllocator &allocator, const KeyTy &key) {
     auto size = DictionaryAttributeStorage::totalSizeToAlloc<NamedAttribute>(
         key.size());
-    auto rawMem = allocator.allocate(size, alignof(NamedAttribute));
+    auto rawMem = allocator.allocate(size, alignof(DictionaryAttributeStorage));
 
     // Initialize the storage and trailing attribute list.
     auto result = ::new (rawMem) DictionaryAttributeStorage(key.size());
@@ -658,7 +658,7 @@ struct OpaqueElementsAttributeStorage : public AttributeStorage {
   /// Construct a new storage instance.
   static OpaqueElementsAttributeStorage *
   construct(AttributeStorageAllocator &allocator, KeyTy key) {
-    // TODO(b/131468830): Provide a way to avoid copying content of large opaque
+    // TODO: Provide a way to avoid copying content of large opaque
     // tensors This will likely require a new reference attribute kind.
     return new (allocator.allocate<OpaqueElementsAttributeStorage>())
         OpaqueElementsAttributeStorage(std::get<0>(key), std::get<1>(key),

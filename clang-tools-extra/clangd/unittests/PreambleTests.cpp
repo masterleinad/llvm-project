@@ -50,7 +50,7 @@ IncludeStructure
 collectPatchedIncludes(llvm::StringRef ModifiedContents,
                        llvm::StringRef BaselineContents,
                        llvm::StringRef MainFileName = "main.cpp") {
-  MockFSProvider FS;
+  MockFS FS;
   auto TU = TestTU::withCode(BaselineContents);
   TU.Filename = MainFileName.str();
   // ms-compatibility changes meaning of #import, make sure it is turned off.
@@ -74,7 +74,7 @@ collectPatchedIncludes(llvm::StringRef ModifiedContents,
       prepareCompilerInstance(std::move(CI), &BaselinePreamble->Preamble,
                               llvm::MemoryBuffer::getMemBufferCopy(
                                   ModifiedContents.slice(0, Bounds.Size).str()),
-                              PI.FSProvider->getFileSystem(), Diags);
+                              PI.TFS->view(PI.CompileCommand.Directory), Diags);
   PreprocessOnlyAction Action;
   if (!Action.BeginSourceFile(*Clang, Clang->getFrontendOpts().Inputs[0])) {
     ADD_FAILURE() << "failed begin source file";
@@ -125,7 +125,7 @@ TEST(PreamblePatchTest, IncludeParsing) {
         #/**/include <b.h>)cpp",
   };
 
-  for (const auto Case : Cases) {
+  for (const auto &Case : Cases) {
     Annotations Test(Case);
     const auto Code = Test.code();
     SCOPED_TRACE(Code);
@@ -165,7 +165,7 @@ TEST(PreamblePatchTest, MainFileIsEscaped) {
 }
 
 TEST(PreamblePatchTest, PatchesPreambleIncludes) {
-  MockFSProvider FS;
+  MockFS FS;
   IgnoreDiagnostics Diags;
   auto TU = TestTU::withCode(R"cpp(
     #include "a.h"
@@ -201,7 +201,7 @@ llvm::Optional<ParsedAST> createPatchedAST(llvm::StringRef Baseline,
   }
 
   IgnoreDiagnostics Diags;
-  MockFSProvider FS;
+  MockFS FS;
   auto TU = TestTU::withCode(Modified);
   auto CI = buildCompilerInvocation(TU.inputs(FS), Diags);
   if (!CI) {
@@ -219,7 +219,7 @@ std::string getPreamblePatch(llvm::StringRef Baseline,
     ADD_FAILURE() << "Failed to build baseline preamble";
     return "";
   }
-  MockFSProvider FS;
+  MockFS FS;
   auto TU = TestTU::withCode(Modified);
   return PreamblePatch::create(testPath("main.cpp"), TU.inputs(FS),
                                *BaselinePreamble)
@@ -230,8 +230,8 @@ std::string getPreamblePatch(llvm::StringRef Baseline,
 TEST(PreamblePatchTest, Define) {
   // BAR should be defined while parsing the AST.
   struct {
-    llvm::StringLiteral Contents;
-    llvm::StringLiteral ExpectedPatch;
+    const char *const Contents;
+    const char *const ExpectedPatch;
   } Cases[] = {
       {
           R"cpp(
@@ -270,7 +270,7 @@ TEST(PreamblePatchTest, Define) {
     SCOPED_TRACE(Case.Contents);
     Annotations Modified(Case.Contents);
     EXPECT_THAT(getPreamblePatch("", Modified.code()),
-                MatchesRegex(Case.ExpectedPatch.str()));
+                MatchesRegex(Case.ExpectedPatch));
 
     auto AST = createPatchedAST("", Modified.code());
     ASSERT_TRUE(AST);
@@ -304,8 +304,8 @@ TEST(PreamblePatchTest, OrderingPreserved) {
 
 TEST(PreamblePatchTest, LocateMacroAtWorks) {
   struct {
-    llvm::StringLiteral Baseline;
-    llvm::StringLiteral Modified;
+    const char *const Baseline;
+    const char *const Modified;
   } Cases[] = {
       // Addition of new directive
       {
@@ -417,8 +417,8 @@ TEST(PreamblePatchTest, LocateMacroAtDeletion) {
 
 TEST(PreamblePatchTest, RefsToMacros) {
   struct {
-    llvm::StringLiteral Baseline;
-    llvm::StringLiteral Modified;
+    const char *const Baseline;
+    const char *const Modified;
   } Cases[] = {
       // Newly added
       {
@@ -487,6 +487,51 @@ TEST(TranslatePreamblePatchLocation, Simple) {
   auto DecompLoc = SM.getDecomposedLoc(TranslatedLoc);
   EXPECT_EQ(DecompLoc.first, SM.getMainFileID());
   EXPECT_EQ(SM.getLineNumber(DecompLoc.first, DecompLoc.second), 3U);
+}
+
+TEST(PreamblePatch, ModifiedBounds) {
+  struct {
+    const char *const Baseline;
+    const char *const Modified;
+  } Cases[] = {
+      // Size increased
+      {
+          "",
+          R"cpp(
+            #define FOO
+            FOO)cpp",
+      },
+      // Stayed same
+      {"#define FOO", "#define BAR"},
+      // Got smaller
+      {
+          R"cpp(
+            #define FOO
+            #undef FOO)cpp",
+          "#define FOO"},
+  };
+
+  for (const auto &Case : Cases) {
+    auto TU = TestTU::withCode(Case.Baseline);
+    auto BaselinePreamble = TU.preamble();
+    ASSERT_TRUE(BaselinePreamble);
+
+    Annotations Modified(Case.Modified);
+    TU.Code = Modified.code().str();
+    MockFS FS;
+    auto PP = PreamblePatch::create(testPath(TU.Filename), TU.inputs(FS),
+                                    *BaselinePreamble);
+
+    IgnoreDiagnostics Diags;
+    auto CI = buildCompilerInvocation(TU.inputs(FS), Diags);
+    ASSERT_TRUE(CI);
+
+    const auto ExpectedBounds =
+        Lexer::ComputePreamble(Case.Modified, *CI->getLangOpts());
+    EXPECT_EQ(PP.modifiedBounds().Size, ExpectedBounds.Size);
+    EXPECT_EQ(PP.modifiedBounds().PreambleEndsAtStartOfLine,
+              ExpectedBounds.PreambleEndsAtStartOfLine);
+  }
 }
 } // namespace
 } // namespace clangd

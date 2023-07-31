@@ -29,6 +29,7 @@ class MachineInstr;
 
 FunctionPass *createVEISelDag(VETargetMachine &TM);
 FunctionPass *createVEPromoteToI1Pass();
+FunctionPass *createLVLGenPass();
 
 void LowerVEMachineInstrToMCInst(const MachineInstr *MI, MCInst &OutMI,
                                  AsmPrinter &AP);
@@ -275,6 +276,52 @@ inline static const char *VERDToString(VERD::RoundingMode R) {
   }
 }
 
+inline static VERD::RoundingMode stringToVERD(StringRef S) {
+  return StringSwitch<VERD::RoundingMode>(S)
+      .Case("", VERD::RD_NONE)
+      .Case(".rz", VERD::RD_RZ)
+      .Case(".rp", VERD::RD_RP)
+      .Case(".rm", VERD::RD_RM)
+      .Case(".rn", VERD::RD_RN)
+      .Case(".ra", VERD::RD_RA)
+      .Default(VERD::UNKNOWN);
+}
+
+inline static unsigned VERDToVal(VERD::RoundingMode R) {
+  switch (R) {
+  case VERD::RD_NONE:
+  case VERD::RD_RZ:
+  case VERD::RD_RP:
+  case VERD::RD_RM:
+  case VERD::RD_RN:
+  case VERD::RD_RA:
+    return static_cast<unsigned>(R);
+  default:
+    break;
+  }
+  llvm_unreachable("Invalid branch predicates");
+}
+
+inline static VERD::RoundingMode VEValToRD(unsigned Val) {
+  switch (Val) {
+  case static_cast<unsigned>(VERD::RD_NONE):
+    return VERD::RD_NONE;
+  case static_cast<unsigned>(VERD::RD_RZ):
+    return VERD::RD_RZ;
+  case static_cast<unsigned>(VERD::RD_RP):
+    return VERD::RD_RP;
+  case static_cast<unsigned>(VERD::RD_RM):
+    return VERD::RD_RM;
+  case static_cast<unsigned>(VERD::RD_RN):
+    return VERD::RD_RN;
+  case static_cast<unsigned>(VERD::RD_RA):
+    return VERD::RD_RA;
+  default:
+    break;
+  }
+  llvm_unreachable("Invalid branch predicates");
+}
+
 // MImm - Special immediate value of sequential bit stream of 0 or 1.
 //   See VEInstrInfo.td for details.
 inline static bool isMImmVal(uint64_t Val) {
@@ -287,7 +334,7 @@ inline static bool isMImmVal(uint64_t Val) {
     return true;
   }
   // (m)1 patterns
-  return (Val & (1UL << 63)) && isShiftedMask_64(Val);
+  return (Val & (UINT64_C(1) << 63)) && isShiftedMask_64(Val);
 }
 
 inline static bool isMImm32Val(uint32_t Val) {
@@ -300,7 +347,25 @@ inline static bool isMImm32Val(uint32_t Val) {
     return true;
   }
   // (m)1 patterns
-  return (Val & (1 << 31)) && isShiftedMask_32(Val);
+  return (Val & (UINT32_C(1) << 31)) && isShiftedMask_32(Val);
+}
+
+/// val2MImm - Convert an integer immediate value to target MImm immediate.
+inline static uint64_t val2MImm(uint64_t Val) {
+  if (Val == 0)
+    return 0; // (0)1
+  if (Val & (UINT64_C(1) << 63))
+    return countLeadingOnes(Val);       // (m)1
+  return countLeadingZeros(Val) | 0x40; // (m)0
+}
+
+/// mimm2Val - Convert a target MImm immediate to an integer immediate value.
+inline static uint64_t mimm2Val(uint64_t Val) {
+  if (Val == 0)
+    return 0; // (0)1
+  if ((Val & 0x40) == 0)
+    return (uint64_t)((INT64_C(1) << 63) >> (Val & 0x3f)); // (m)1
+  return ((uint64_t)INT64_C(-1) >> (Val & 0x3f));          // (m)0
 }
 
 inline unsigned M0(unsigned Val) { return Val + 64; }

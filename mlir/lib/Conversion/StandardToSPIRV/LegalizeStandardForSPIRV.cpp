@@ -12,32 +12,93 @@
 //===----------------------------------------------------------------------===//
 
 #include "../PassDetail.h"
-#include "mlir/Conversion/StandardToSPIRV/ConvertStandardToSPIRV.h"
-#include "mlir/Conversion/StandardToSPIRV/ConvertStandardToSPIRVPass.h"
+#include "mlir/Conversion/StandardToSPIRV/StandardToSPIRV.h"
+#include "mlir/Conversion/StandardToSPIRV/StandardToSPIRVPass.h"
+#include "mlir/Dialect/SPIRV/IR/SPIRVDialect.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
-#include "mlir/IR/PatternMatch.h"
-#include "mlir/IR/StandardTypes.h"
+#include "mlir/Dialect/Vector/VectorOps.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 using namespace mlir;
 
+/// Helpers to access the memref operand for each op.
+static Value getMemRefOperand(LoadOp op) { return op.memref(); }
+
+static Value getMemRefOperand(vector::TransferReadOp op) { return op.source(); }
+
+static Value getMemRefOperand(StoreOp op) { return op.memref(); }
+
+static Value getMemRefOperand(vector::TransferWriteOp op) {
+  return op.source();
+}
+
 namespace {
-/// Merges subview operation with load operation.
-class LoadOpOfSubViewFolder final : public OpRewritePattern<LoadOp> {
+/// Merges subview operation with load/transferRead operation.
+template <typename OpTy>
+class LoadOpOfSubViewFolder final : public OpRewritePattern<OpTy> {
 public:
-  using OpRewritePattern<LoadOp>::OpRewritePattern;
+  using OpRewritePattern<OpTy>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(LoadOp loadOp,
+  LogicalResult matchAndRewrite(OpTy loadOp,
                                 PatternRewriter &rewriter) const override;
+
+private:
+  void replaceOp(OpTy loadOp, SubViewOp subViewOp,
+                 ArrayRef<Value> sourceIndices,
+                 PatternRewriter &rewriter) const;
 };
 
-/// Merges subview operation with store operation.
-class StoreOpOfSubViewFolder final : public OpRewritePattern<StoreOp> {
+/// Merges subview operation with store/transferWriteOp operation.
+template <typename OpTy>
+class StoreOpOfSubViewFolder final : public OpRewritePattern<OpTy> {
 public:
-  using OpRewritePattern<StoreOp>::OpRewritePattern;
+  using OpRewritePattern<OpTy>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(StoreOp storeOp,
+  LogicalResult matchAndRewrite(OpTy storeOp,
                                 PatternRewriter &rewriter) const override;
+
+private:
+  void replaceOp(OpTy StoreOp, SubViewOp subViewOp,
+                 ArrayRef<Value> sourceIndices,
+                 PatternRewriter &rewriter) const;
 };
+
+template <>
+void LoadOpOfSubViewFolder<LoadOp>::replaceOp(LoadOp loadOp,
+                                              SubViewOp subViewOp,
+                                              ArrayRef<Value> sourceIndices,
+                                              PatternRewriter &rewriter) const {
+  rewriter.replaceOpWithNewOp<LoadOp>(loadOp, subViewOp.source(),
+                                      sourceIndices);
+}
+
+template <>
+void LoadOpOfSubViewFolder<vector::TransferReadOp>::replaceOp(
+    vector::TransferReadOp loadOp, SubViewOp subViewOp,
+    ArrayRef<Value> sourceIndices, PatternRewriter &rewriter) const {
+  rewriter.replaceOpWithNewOp<vector::TransferReadOp>(
+      loadOp, loadOp.getVectorType(), subViewOp.source(), sourceIndices,
+      loadOp.permutation_map(), loadOp.padding(), loadOp.maskedAttr());
+}
+
+template <>
+void StoreOpOfSubViewFolder<StoreOp>::replaceOp(
+    StoreOp storeOp, SubViewOp subViewOp, ArrayRef<Value> sourceIndices,
+    PatternRewriter &rewriter) const {
+  rewriter.replaceOpWithNewOp<StoreOp>(storeOp, storeOp.value(),
+                                       subViewOp.source(), sourceIndices);
+}
+
+template <>
+void StoreOpOfSubViewFolder<vector::TransferWriteOp>::replaceOp(
+    vector::TransferWriteOp tranferWriteOp, SubViewOp subViewOp,
+    ArrayRef<Value> sourceIndices, PatternRewriter &rewriter) const {
+  rewriter.replaceOpWithNewOp<vector::TransferWriteOp>(
+      tranferWriteOp, tranferWriteOp.vector(), subViewOp.source(),
+      sourceIndices, tranferWriteOp.permutation_map(),
+      tranferWriteOp.maskedAttr());
+}
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -64,19 +125,18 @@ resolveSourceIndices(Location loc, PatternRewriter &rewriter,
   // TODO: Aborting when the offsets are static. There might be a way to fold
   // the subview op with load even if the offsets have been canonicalized
   // away.
-  SmallVector<Value, 4> opOffsets = subViewOp.getOrCreateOffsets(rewriter, loc);
-  SmallVector<Value, 4> opStrides = subViewOp.getOrCreateStrides(rewriter, loc);
-  assert(opOffsets.size() == indices.size() &&
-         "expected as many indices as rank of subview op result type");
-  assert(opStrides.size() == indices.size() &&
+  SmallVector<Range, 4> opRanges = subViewOp.getOrCreateRanges(rewriter, loc);
+  auto opOffsets = llvm::map_range(opRanges, [](Range r) { return r.offset; });
+  auto opStrides = llvm::map_range(opRanges, [](Range r) { return r.stride; });
+  assert(opRanges.size() == indices.size() &&
          "expected as many indices as rank of subview op result type");
 
   // New indices for the load are the current indices * subview_stride +
   // subview_offset.
   sourceIndices.resize(indices.size());
   for (auto index : llvm::enumerate(indices)) {
-    auto offset = opOffsets[index.index()];
-    auto stride = opStrides[index.index()];
+    auto offset = *(opOffsets.begin() + index.index());
+    auto stride = *(opStrides.begin() + index.index());
     auto mul = rewriter.create<MulIOp>(loc, index.value(), stride);
     sourceIndices[index.index()] =
         rewriter.create<AddIOp>(loc, offset, mul).getResult();
@@ -85,13 +145,14 @@ resolveSourceIndices(Location loc, PatternRewriter &rewriter,
 }
 
 //===----------------------------------------------------------------------===//
-// Folding SubViewOp and LoadOp.
+// Folding SubViewOp and LoadOp/TransferReadOp.
 //===----------------------------------------------------------------------===//
 
+template <typename OpTy>
 LogicalResult
-LoadOpOfSubViewFolder::matchAndRewrite(LoadOp loadOp,
-                                       PatternRewriter &rewriter) const {
-  auto subViewOp = loadOp.memref().getDefiningOp<SubViewOp>();
+LoadOpOfSubViewFolder<OpTy>::matchAndRewrite(OpTy loadOp,
+                                             PatternRewriter &rewriter) const {
+  auto subViewOp = getMemRefOperand(loadOp).template getDefiningOp<SubViewOp>();
   if (!subViewOp) {
     return failure();
   }
@@ -100,19 +161,20 @@ LoadOpOfSubViewFolder::matchAndRewrite(LoadOp loadOp,
                                   loadOp.indices(), sourceIndices)))
     return failure();
 
-  rewriter.replaceOpWithNewOp<LoadOp>(loadOp, subViewOp.source(),
-                                      sourceIndices);
+  replaceOp(loadOp, subViewOp, sourceIndices, rewriter);
   return success();
 }
 
 //===----------------------------------------------------------------------===//
-// Folding SubViewOp and StoreOp.
+// Folding SubViewOp and StoreOp/TransferWriteOp.
 //===----------------------------------------------------------------------===//
 
+template <typename OpTy>
 LogicalResult
-StoreOpOfSubViewFolder::matchAndRewrite(StoreOp storeOp,
-                                        PatternRewriter &rewriter) const {
-  auto subViewOp = storeOp.memref().getDefiningOp<SubViewOp>();
+StoreOpOfSubViewFolder<OpTy>::matchAndRewrite(OpTy storeOp,
+                                              PatternRewriter &rewriter) const {
+  auto subViewOp =
+      getMemRefOperand(storeOp).template getDefiningOp<SubViewOp>();
   if (!subViewOp) {
     return failure();
   }
@@ -121,8 +183,7 @@ StoreOpOfSubViewFolder::matchAndRewrite(StoreOp storeOp,
                                   storeOp.indices(), sourceIndices)))
     return failure();
 
-  rewriter.replaceOpWithNewOp<StoreOp>(storeOp, storeOp.value(),
-                                       subViewOp.source(), sourceIndices);
+  replaceOp(storeOp, subViewOp, sourceIndices, rewriter);
   return success();
 }
 
@@ -132,7 +193,10 @@ StoreOpOfSubViewFolder::matchAndRewrite(StoreOp storeOp,
 
 void mlir::populateStdLegalizationPatternsForSPIRVLowering(
     MLIRContext *context, OwningRewritePatternList &patterns) {
-  patterns.insert<LoadOpOfSubViewFolder, StoreOpOfSubViewFolder>(context);
+  patterns.insert<LoadOpOfSubViewFolder<LoadOp>,
+                  LoadOpOfSubViewFolder<vector::TransferReadOp>,
+                  StoreOpOfSubViewFolder<StoreOp>,
+                  StoreOpOfSubViewFolder<vector::TransferWriteOp>>(context);
 }
 
 //===----------------------------------------------------------------------===//
@@ -150,7 +214,8 @@ void SPIRVLegalization::runOnOperation() {
   OwningRewritePatternList patterns;
   auto *context = &getContext();
   populateStdLegalizationPatternsForSPIRVLowering(context, patterns);
-  applyPatternsAndFoldGreedily(getOperation()->getRegions(), patterns);
+  applyPatternsAndFoldGreedily(getOperation()->getRegions(),
+                               std::move(patterns));
 }
 
 std::unique_ptr<Pass> mlir::createLegalizeStdOpsForSPIRVLoweringPass() {

@@ -4,14 +4,11 @@
 define <2 x i64> @z(i64* nocapture nonnull readonly %p) {
 ; CHECK-LABEL: z:
 ; CHECK:       // %bb.0:
-; CHECK-NEXT:    mov x8, xzr
+; CHECK-NEXT:    ldr x9, [x0]
+; CHECK-NEXT:    ldr x8, [x0, #8]
 ; CHECK-NEXT:    // implicit-def: $q0
-; CHECK-NEXT:    fmov d0, x8
+; CHECK-NEXT:    fmov d0, x9
 ; CHECK-NEXT:    mov v0.d[1], x8
-; CHECK-NEXT:    ldr x8, [x0]
-; CHECK-NEXT:    ldr x9, [x0, #8]
-; CHECK-NEXT:    mov v0.d[0], x8
-; CHECK-NEXT:    mov v0.d[1], x9
 ; CHECK-NEXT:    ret
   %b = load i64, i64* %p
   %p2 = getelementptr i64, i64* %p, i64 1

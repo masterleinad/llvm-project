@@ -9,6 +9,7 @@
 // Wrapper implementation to some functions natively supported by the GPU.
 //
 //===----------------------------------------------------------------------===//
+#pragma omp declare target
 
 #include "common/support.h"
 #include "common/debug.h"
@@ -264,6 +265,4 @@ DEVICE char *GetTeamsReductionScratchpad() {
   return static_cast<char *>(ReductionScratchpadPtr) + 256;
 }
 
-DEVICE void SetTeamsReductionScratchpadPtr(void *ScratchpadPtr) {
-  ReductionScratchpadPtr = ScratchpadPtr;
-}
+#pragma omp end declare target

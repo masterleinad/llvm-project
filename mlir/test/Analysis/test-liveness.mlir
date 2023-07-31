@@ -1,4 +1,4 @@
-// RUN: mlir-opt %s -test-print-liveness -split-input-file 2>&1 | FileCheck %s --dump-input-on-failure
+// RUN: mlir-opt %s -test-print-liveness -split-input-file 2>&1 | FileCheck %s
 
 // CHECK-LABEL: Testing : func_empty
 func @func_empty() {
@@ -84,7 +84,7 @@ func @func_loop(%arg0 : i32, %arg1 : i32) -> i32 {
   // CHECK-NEXT:     %2 = cmpi
   // CHECK-NEXT:     cond_br
   // CHECK-NEXT: EndLiveness
-  %lessThan = cmpi "slt", %counter, %arg1 : i32
+  %lessThan = cmpi slt, %counter, %arg1 : i32
   cond_br %lessThan, ^loopBody(%i : i32), ^exit(%i : i32)
 ^loopBody(%val : i32):
   // CHECK: Block: 2

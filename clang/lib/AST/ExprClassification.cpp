@@ -130,7 +130,6 @@ static Cl::Kinds ClassifyInternal(ASTContext &Ctx, const Expr *E) {
   case Expr::UnresolvedLookupExprClass:
   case Expr::UnresolvedMemberExprClass:
   case Expr::TypoExprClass:
-  case Expr::RecoveryExprClass:
   case Expr::DependentCoawaitExprClass:
   case Expr::CXXDependentScopeMemberExprClass:
   case Expr::DependentScopeDeclRefExprClass:
@@ -276,6 +275,7 @@ static Cl::Kinds ClassifyInternal(ASTContext &Ctx, const Expr *E) {
       return Cl::CL_PRValue;
     }
 
+  case Expr::RecoveryExprClass:
   case Expr::OpaqueValueExprClass:
     return ClassifyExprValueKind(Lang, E, E->getValueKind());
 
@@ -453,12 +453,14 @@ static Cl::Kinds ClassifyDecl(ASTContext &Ctx, const Decl *D) {
 
   bool islvalue;
   if (const auto *NTTParm = dyn_cast<NonTypeTemplateParmDecl>(D))
-    islvalue = NTTParm->getType()->isReferenceType();
+    islvalue = NTTParm->getType()->isReferenceType() ||
+               NTTParm->getType()->isRecordType();
   else
     islvalue = isa<VarDecl>(D) || isa<FieldDecl>(D) ||
                isa<IndirectFieldDecl>(D) ||
                isa<BindingDecl>(D) ||
                isa<MSGuidDecl>(D) ||
+               isa<TemplateParamObjectDecl>(D) ||
                (Ctx.getLangOpts().CPlusPlus &&
                 (isa<FunctionDecl>(D) || isa<MSPropertyDecl>(D) ||
                  isa<FunctionTemplateDecl>(D)));

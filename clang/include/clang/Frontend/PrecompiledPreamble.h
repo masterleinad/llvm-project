@@ -26,6 +26,7 @@
 
 namespace llvm {
 class MemoryBuffer;
+class MemoryBufferRef;
 namespace vfs {
 class FileSystem;
 }
@@ -34,12 +35,13 @@ class FileSystem;
 namespace clang {
 class CompilerInstance;
 class CompilerInvocation;
+class Decl;
 class DeclGroupRef;
 class PCHContainerOperations;
 
 /// Runs lexer to compute suggested preamble bounds.
 PreambleBounds ComputePreambleBounds(const LangOptions &LangOpts,
-                                     const llvm::MemoryBuffer *Buffer,
+                                     const llvm::MemoryBufferRef &Buffer,
                                      unsigned MaxLines);
 
 class PreambleCallbacks;
@@ -103,8 +105,8 @@ public:
   /// Check whether PrecompiledPreamble can be reused for the new contents(\p
   /// MainFileBuffer) of the main file.
   bool CanReuse(const CompilerInvocation &Invocation,
-                const llvm::MemoryBuffer *MainFileBuffer, PreambleBounds Bounds,
-                llvm::vfs::FileSystem *VFS) const;
+                const llvm::MemoryBufferRef &MainFileBuffer,
+                PreambleBounds Bounds, llvm::vfs::FileSystem &VFS) const;
 
   /// Changes options inside \p CI to use PCH from this preamble. Also remaps
   /// main file to \p MainFileBuffer and updates \p VFS to ensure the preamble
@@ -215,7 +217,7 @@ private:
 
     static PreambleFileHash createForFile(off_t Size, time_t ModTime);
     static PreambleFileHash
-    createForMemoryBuffer(const llvm::MemoryBuffer *Buffer);
+    createForMemoryBuffer(const llvm::MemoryBufferRef &Buffer);
 
     friend bool operator==(const PreambleFileHash &LHS,
                            const PreambleFileHash &RHS) {
@@ -293,6 +295,10 @@ public:
   virtual std::unique_ptr<PPCallbacks> createPPCallbacks();
   /// The returned CommentHandler will be added to the preprocessor if not null.
   virtual CommentHandler *getCommentHandler();
+  /// Determines which function bodies are parsed, by default skips everything.
+  /// Only used if FrontendOpts::SkipFunctionBodies is true.
+  /// See ASTConsumer::shouldSkipFunctionBody.
+  virtual bool shouldSkipFunctionBody(Decl *D) { return true; }
 };
 
 enum class BuildPreambleError {

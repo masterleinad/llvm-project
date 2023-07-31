@@ -26,10 +26,15 @@ def Linalg_Dialect : Dialect {
 
     Additional [Linalg Dialect
     Documentation](https://mlir.llvm.org/docs/Dialects/Linalg) and a
-    [Rationale Document](https://mlir.llvm.org/docs/RationaleLinalgDialect) are
+    [Rationale
+    Document](https://mlir.llvm.org/docs/Rationale/RationaleLinalgDialect) are
     are also available and should be read first before going in the details of
     the op semantics.
   }];
+  let cppNamespace = "::mlir::linalg";
+  let dependentDialects = [
+    "AffineDialect", "StandardOpsDialect", "tensor::TensorDialect"
+  ];
 }
 
 // Whether a type is a RangeType.

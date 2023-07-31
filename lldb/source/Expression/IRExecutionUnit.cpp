@@ -265,11 +265,9 @@ void IRExecutionUnit::GetRunnableInfo(Status &error, lldb::addr_t &func_addr,
 
   builder.setEngineKind(llvm::EngineKind::JIT)
       .setErrorStr(&error_string)
-      .setRelocationModel(triple.isOSBinFormatMachO()
-                              ? llvm::Reloc::PIC_
-                              : llvm::Reloc::Static)
-      .setMCJITMemoryManager(
-          std::unique_ptr<MemoryManager>(new MemoryManager(*this)))
+      .setRelocationModel(triple.isOSBinFormatMachO() ? llvm::Reloc::PIC_
+                                                      : llvm::Reloc::Static)
+      .setMCJITMemoryManager(std::make_unique<MemoryManager>(*this))
       .setOptLevel(llvm::CodeGenOpt::Less);
 
   llvm::StringRef mArch;
@@ -330,8 +328,7 @@ void IRExecutionUnit::GetRunnableInfo(Status &error, lldb::addr_t &func_addr,
     if (function.isDeclaration() || function.hasPrivateLinkage())
       continue;
 
-    const bool external =
-        function.hasExternalLinkage() || function.hasLinkOnceODRLinkage();
+    const bool external = !function.hasLocalLinkage();
 
     void *fun_ptr = m_execution_engine_up->getPointerToFunction(&function);
 

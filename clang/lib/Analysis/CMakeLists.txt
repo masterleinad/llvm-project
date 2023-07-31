@@ -6,6 +6,7 @@ set(LLVM_LINK_COMPONENTS
 add_clang_library(clangAnalysis
   AnalysisDeclContext.cpp
   BodyFarm.cpp
+  CalledOnceCheck.cpp
   CFG.cpp
   CFGReachabilityAnalysis.cpp
   CFGStmtMap.cpp
@@ -17,6 +18,7 @@ add_clang_library(clangAnalysis
   CodeInjector.cpp
   Dominators.cpp
   ExprMutationAnalyzer.cpp
+  IssueHash.cpp
   LiveVariables.cpp
   ObjCNoReturn.cpp
   PathDiagnostic.cpp
@@ -35,6 +37,9 @@ add_clang_library(clangAnalysis
   clangASTMatchers
   clangBasic
   clangLex
+
+  DEPENDS
+  omp_gen
   )
 
 add_subdirectory(plugins)

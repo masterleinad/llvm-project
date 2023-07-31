@@ -7,21 +7,30 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/MC/MCAsmInfoXCOFF.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/CommandLine.h"
 
 using namespace llvm;
+
+extern cl::opt<cl::boolOrDefault> UseLEB128Directives;
 
 void MCAsmInfoXCOFF::anchor() {}
 
 MCAsmInfoXCOFF::MCAsmInfoXCOFF() {
   IsLittleEndian = false;
+  HasVisibilityOnlyWithLinkage = true;
   PrivateGlobalPrefix = "L..";
   PrivateLabelPrefix = "L..";
   SupportsQuotedNames = false;
   UseDotAlignForAlignment = true;
+  if (UseLEB128Directives == cl::BOU_UNSET)
+    HasLEB128Directives = false;
   ZeroDirective = "\t.space\t";
   ZeroDirectiveSupportsNonZeroValue = false;
   AsciiDirective = nullptr; // not supported
   AscizDirective = nullptr; // not supported
+  ByteListDirective = "\t.byte\t";
+  CharacterLiteralSyntax = ACLS_SingleQuotePrefix;
 
   // Use .vbyte for data definition to avoid directives that apply an implicit
   // alignment.
@@ -31,11 +40,10 @@ MCAsmInfoXCOFF::MCAsmInfoXCOFF() {
   COMMDirectiveAlignmentIsInBytes = false;
   LCOMMDirectiveAlignmentType = LCOMM::Log2Alignment;
   HasDotTypeDotSizeDirective = false;
-  HasDotExternDirective = true;
-  HasDotLGloblDirective = true;
-  SymbolsHaveSMC = true;
   UseIntegratedAssembler = false;
   NeedsFunctionDescriptors = true;
+
+  ExceptionsType = ExceptionHandling::AIX;
 }
 
 bool MCAsmInfoXCOFF::isAcceptableChar(char C) const {
@@ -44,5 +52,8 @@ bool MCAsmInfoXCOFF::isAcceptableChar(char C) const {
   if (C == '[' || C == ']')
     return true;
 
-  return MCAsmInfo::isAcceptableChar(C);
+  // For AIX assembler, symbols may consist of numeric digits,
+  // underscores, periods, uppercase or lowercase letters, or
+  // any combination of these.
+  return isAlnum(C) || C == '_' || C == '.';
 }

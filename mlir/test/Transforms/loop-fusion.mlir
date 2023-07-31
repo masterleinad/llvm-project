@@ -1,12 +1,12 @@
 // RUN: mlir-opt -allow-unregistered-dialect %s -affine-loop-fusion -split-input-file | FileCheck %s
 // RUN: mlir-opt -allow-unregistered-dialect %s -affine-loop-fusion="fusion-maximal" -split-input-file | FileCheck %s --check-prefix=MAXIMAL
 
-// TODO(andydavis) Add more tests:
+// TODO: Add more tests:
 // *) Add nested fusion test cases when non-constant loop bound support is
 //    added to iteration domain in dependence check.
 // *) Add a test w/ floordiv/ceildiv/mod when supported in dependence check.
 // *) Add tests which check fused computation slice indexing and loop bounds.
-// TODO(andydavis) Test clean up: move memref allocs to func args.
+// TODO: Test clean up: move memref allocs to func args.
 
 // -----
 
@@ -70,9 +70,9 @@ func @should_fuse_reduction_to_pointwise() {
 
 // -----
 
-// CHECK-DAG: [[MAP_SHIFT_MINUS_ONE_R1:#map[0-9]+]] = affine_map<(d0) -> (d0 - 1)>
-// CHECK-DAG: [[MAP_SHIFT_D0_BY_ONE:#map[0-9]+]] = affine_map<(d0, d1) -> (d0 + 1)>
-// CHECK-DAG: [[MAP_SHIFT_D1_BY_ONE:#map[0-9]+]] = affine_map<(d0, d1) -> (d1 + 1)>
+// CHECK-DAG: [[$MAP_SHIFT_MINUS_ONE_R1:#map[0-9]+]] = affine_map<(d0) -> (d0 - 1)>
+// CHECK-DAG: [[$MAP_SHIFT_D0_BY_ONE:#map[0-9]+]] = affine_map<(d0, d1) -> (d0 + 1)>
+// CHECK-DAG: [[$MAP_SHIFT_D1_BY_ONE:#map[0-9]+]] = affine_map<(d0, d1) -> (d1 + 1)>
 
 // CHECK-LABEL: func @should_fuse_loop_nests_with_shifts() {
 func @should_fuse_loop_nests_with_shifts() {
@@ -100,10 +100,10 @@ func @should_fuse_loop_nests_with_shifts() {
   // NOTE: Should create a private memref with reduced shape 9x9xf32.
   // CHECK:      affine.for %{{.*}} = 1 to 10 {
   // CHECK-NEXT:   affine.for %{{.*}} = 1 to 10 {
-  // CHECK-NEXT:     %[[I:.*]] = affine.apply [[MAP_SHIFT_MINUS_ONE_R1]](%{{.*}})
-  // CHECK-NEXT:     %[[J:.*]] = affine.apply [[MAP_SHIFT_MINUS_ONE_R1]](%{{.*}})
-  // CHECK-NEXT:     affine.apply [[MAP_SHIFT_D0_BY_ONE]](%[[I]], %[[J]])
-  // CHECK-NEXT:     affine.apply [[MAP_SHIFT_D1_BY_ONE]](%[[I]], %[[J]])
+  // CHECK-NEXT:     %[[I:.*]] = affine.apply [[$MAP_SHIFT_MINUS_ONE_R1]](%{{.*}})
+  // CHECK-NEXT:     %[[J:.*]] = affine.apply [[$MAP_SHIFT_MINUS_ONE_R1]](%{{.*}})
+  // CHECK-NEXT:     affine.apply [[$MAP_SHIFT_D0_BY_ONE]](%[[I]], %[[J]])
+  // CHECK-NEXT:     affine.apply [[$MAP_SHIFT_D1_BY_ONE]](%[[I]], %[[J]])
   // CHECK-NEXT:     affine.store %{{.*}}, %{{.*}}[0, 0] : memref<1x1xf32>
   // CHECK-NEXT:     affine.load %{{.*}}[0, 0] : memref<1x1xf32>
   // CHECK-NEXT:   }
@@ -317,7 +317,7 @@ func @should_fuse_producer_consumer() {
   }
   // Fusing loop %i0 to %i2 would violate the WAW dependence between %i0 and
   // %i1, but OK to fuse %i1 into %i2.
-  // TODO(andydavis) When the fusion pass is run to a fixed-point, it should
+  // TODO: When the fusion pass is run to a fixed-point, it should
   // fuse all three of these loop nests.
   // CHECK:      alloc() : memref<1xf32>
   // CHECK:      affine.for %{{.*}} = 0 to 10 {
@@ -364,8 +364,8 @@ func @should_fuse_and_move_to_preserve_war_dep() {
 
 // -----
 
-// CHECK-LABEL: func @should_fuse_with_private_memref_if_top_level_access() {
-func @should_fuse_with_private_memref_if_top_level_access() {
+// CHECK-LABEL: func @should_fuse_if_top_level_access() {
+func @should_fuse_if_top_level_access() {
   %m = alloc() : memref<10xf32>
   %cf7 = constant 7.0 : f32
 
@@ -378,14 +378,45 @@ func @should_fuse_with_private_memref_if_top_level_access() {
 
   %c0 = constant 4 : index
   %v1 = affine.load %m[%c0] : memref<10xf32>
-  // Top-level load to '%{{.*}}' should prevent fusion.
-  // CHECK:      affine.for %{{.*}} = 0 to 10 {
-  // CHECK-NEXT:   affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<10xf32>
+  // Top-level load to '%m' should prevent creating a private memref but
+  // loop nests should be fused and '%i0' should be removed.
+  // CHECK:      %[[m:.*]] = alloc() : memref<10xf32>
+  // CHECK-NOT:  alloc
+
+  // CHECK:      affine.for %[[i1:.*]] = 0 to 10 {
+  // CHECK-NEXT:   affine.store %{{.*}}, %[[m]][%[[i1]]] : memref<10xf32>
+  // CHECK-NEXT:   affine.load %[[m]][%[[i1]]] : memref<10xf32>
   // CHECK-NEXT: }
-  // CHECK-NEXT: affine.for %{{.*}} = 0 to 10 {
+  // CHECK:      affine.load %[[m]][%{{.*}}] : memref<10xf32>
+  return
+}
+
+// -----
+
+// CHECK-LABEL: func @should_fuse_but_not_remove_src() {
+func @should_fuse_but_not_remove_src() {
+  %m = alloc() : memref<100xf32>
+  %cf7 = constant 7.0 : f32
+
+  affine.for %i0 = 0 to 100 {
+    affine.store %cf7, %m[%i0] : memref<100xf32>
+  }
+  affine.for %i1 = 0 to 17 {
+    %v0 = affine.load %m[%i1] : memref<100xf32>
+  }
+  %v1 = affine.load %m[99] : memref<100xf32>
+
+  // Loop '%i0' and '%i1' should be fused but '%i0' shouldn't be removed to
+  // preserve the dependence with the top-level access.
+  // CHECK:      affine.for %{{.*}} = 0 to 100 {
+  // CHECK-NEXT:   affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<100xf32>
+  // CHECK-NEXT: }
+  // CHECK-NEXT: affine.for %{{.*}} = 0 to 17 {
   // CHECK-NEXT:   affine.store %{{.*}}, %{{.*}}[0] : memref<1xf32>
   // CHECK-NEXT:   affine.load %{{.*}}[0] : memref<1xf32>
   // CHECK-NEXT: }
+  // CHECK-NEXT: affine.load %{{.*}}[99] : memref<100xf32>
+  // CHECK-NEXT: return
   return
 }
 
@@ -462,7 +493,7 @@ func @should_not_fuse_if_inst_in_loop_nest() {
   // CHECK-NEXT:   affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<10xf32>
   // CHECK-NEXT: }
   // CHECK:      affine.for %{{.*}} = 0 to 10 {
-  // CHECK-NEXT:   affine.if #set0(%{{.*}}) {
+  // CHECK-NEXT:   affine.if #set(%{{.*}}) {
   // CHECK-NEXT:   }
   // CHECK-NEXT:   affine.load %{{.*}}[%{{.*}}] : memref<10xf32>
   // CHECK-NEXT: }
@@ -507,9 +538,9 @@ func @permute_and_fuse() {
 
 // -----
 
-// CHECK-DAG: [[MAP0:#map[0-9]+]] = affine_map<(d0, d1) -> (d0 * 4 + d1)>
-// CHECK-DAG: [[MAP1:#map[0-9]+]] = affine_map<(d0) -> (d0 floordiv 4)>
-// CHECK-DAG: [[MAP2:#map[0-9]+]] = affine_map<(d0) -> (d0 mod 4)>
+// CHECK-DAG: [[$MAP0:#map[0-9]+]] = affine_map<(d0, d1) -> (d0 * 4 + d1)>
+// CHECK-DAG: [[$MAP1:#map[0-9]+]] = affine_map<(d0) -> (d0 floordiv 4)>
+// CHECK-DAG: [[$MAP2:#map[0-9]+]] = affine_map<(d0) -> (d0 mod 4)>
 
 // Reshape from a 64 x f32 to 16 x 4 x f32.
 // CHECK-LABEL: func @fuse_reshape_64_16_4
@@ -537,9 +568,9 @@ func @fuse_reshape_64_16_4(%in : memref<64xf32>) {
 }
 
 // -----
-// CHECK-DAG: [[MAP0:#map[0-9]+]] = affine_map<(d0) -> (d0 floordiv 4)>
-// CHECK-DAG: [[MAP1:#map[0-9]+]] = affine_map<(d0) -> (d0 mod 4)>
-// CHECK-DAG: [[MAP2:#map[0-9]+]] = affine_map<(d0, d1) -> (d0 * 4 + d1)>
+// CHECK-DAG: [[$MAP0:#map[0-9]+]] = affine_map<(d0) -> (d0 floordiv 4)>
+// CHECK-DAG: [[$MAP1:#map[0-9]+]] = affine_map<(d0) -> (d0 mod 4)>
+// CHECK-DAG: [[$MAP2:#map[0-9]+]] = affine_map<(d0, d1) -> (d0 * 4 + d1)>
 
 // Reshape a 16x4xf32 to 64xf32.
 // CHECK-LABEL: func @fuse_reshape_16_4_64
@@ -559,10 +590,10 @@ func @fuse_reshape_16_4_64() {
     "foo"(%w) : (f32) -> ()
   }
 // CHECK:       affine.for %{{.*}} = 0 to 64 {
-// CHECK-NEXT:    affine.apply [[MAP0]](%{{.*}})
-// CHECK-NEXT:    affine.apply [[MAP1]](%{{.*}})
+// CHECK-NEXT:    affine.apply [[$MAP0]](%{{.*}})
+// CHECK-NEXT:    affine.apply [[$MAP1]](%{{.*}})
 // CHECK-NEXT:    affine.load %{{.*}}[%{{.*}}, %{{.*}}] : memref<16x4xf32>
-// CHECK-NEXT:    affine.apply [[MAP2]](%{{.*}}, %{{.*}})
+// CHECK-NEXT:    affine.apply [[$MAP2]](%{{.*}}, %{{.*}})
 // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[0] : memref<1xf32>
 // CHECK-NEXT:    affine.load %{{.*}}[0] : memref<1xf32>
 // CHECK-NEXT:    "foo"(%{{.*}}) : (f32) -> ()
@@ -624,18 +655,18 @@ func @R6_to_R2_reshape_square() -> memref<64x9xi32> {
 // Everything above is fused to a single 2-d loop nest, and the 6-d tensor %in
 // is eliminated if -memref-dataflow-opt is also supplied.
 //
-// CHECK-DAG: [[MAP0:#map[0-9]+]] = affine_map<(d0, d1) -> ((d0 * 9 + d1) floordiv 288)>
-// CHECK-DAG: [[MAP1:#map[0-9]+]] = affine_map<(d0, d1) -> (((d0 * 9 + d1) mod 288) floordiv 144)>
-// CHECK-DAG: [[MAP2:#map[0-9]+]] = affine_map<(d0, d1) -> ((((d0 * 9 + d1) mod 288) mod 144) floordiv 48)>
-// CHECK-DAG: [[MAP3:#map[0-9]+]] = affine_map<(d0, d1) -> (((((d0 * 9 + d1) mod 288) mod 144) mod 48) floordiv 16)>
-// CHECK-DAG: [[MAP4:#map[0-9]+]] = affine_map<(d0, d1) -> (((((d0 * 9 + d1) mod 288) mod 144) mod 48) mod 16)>
-// CHECK-DAG: [[MAP11:#map[0-9]+]] = affine_map<(d0, d1) -> (d0 * 9 + d1)>
-// CHECK-DAG: [[MAP12:#map[0-9]+]] = affine_map<(d0) -> (d0 floordiv 288)>
-// CHECK-DAG: [[MAP13:#map[0-9]+]] = affine_map<(d0) -> ((d0 mod 288) floordiv 144)>
-// CHECK-DAG: [[MAP14:#map[0-9]+]] = affine_map<(d0) -> (((d0 mod 288) mod 144) floordiv 48)>
-// CHECK-DAG: [[MAP15:#map[0-9]+]] = affine_map<(d0) -> ((((d0 mod 288) mod 144) mod 48) floordiv 16)>
-// CHECK-DAG: [[MAP16:#map[0-9]+]] = affine_map<(d0) -> ((((d0 mod 288) mod 144) mod 48) mod 16)>
-// CHECK-DAG: [[MAP17:#map[0-9]+]] = affine_map<(d0) -> (0)>
+// CHECK-DAG: [[$MAP0:#map[0-9]+]] = affine_map<(d0, d1) -> ((d0 * 9 + d1) floordiv 288)>
+// CHECK-DAG: [[$MAP1:#map[0-9]+]] = affine_map<(d0, d1) -> (((d0 * 9 + d1) mod 288) floordiv 144)>
+// CHECK-DAG: [[$MAP2:#map[0-9]+]] = affine_map<(d0, d1) -> ((((d0 * 9 + d1) mod 288) mod 144) floordiv 48)>
+// CHECK-DAG: [[$MAP3:#map[0-9]+]] = affine_map<(d0, d1) -> (((((d0 * 9 + d1) mod 288) mod 144) mod 48) floordiv 16)>
+// CHECK-DAG: [[$MAP4:#map[0-9]+]] = affine_map<(d0, d1) -> (((((d0 * 9 + d1) mod 288) mod 144) mod 48) mod 16)>
+// CHECK-DAG: [[$MAP11:#map[0-9]+]] = affine_map<(d0, d1) -> (d0 * 9 + d1)>
+// CHECK-DAG: [[$MAP12:#map[0-9]+]] = affine_map<(d0) -> (d0 floordiv 288)>
+// CHECK-DAG: [[$MAP13:#map[0-9]+]] = affine_map<(d0) -> ((d0 mod 288) floordiv 144)>
+// CHECK-DAG: [[$MAP14:#map[0-9]+]] = affine_map<(d0) -> (((d0 mod 288) mod 144) floordiv 48)>
+// CHECK-DAG: [[$MAP15:#map[0-9]+]] = affine_map<(d0) -> ((((d0 mod 288) mod 144) mod 48) floordiv 16)>
+// CHECK-DAG: [[$MAP16:#map[0-9]+]] = affine_map<(d0) -> ((((d0 mod 288) mod 144) mod 48) mod 16)>
+// CHECK-DAG: [[$MAP17:#map[0-9]+]] = affine_map<(d0) -> (0)>
 
 //
 // CHECK-LABEL: func @R6_to_R2_reshape
@@ -644,20 +675,20 @@ func @R6_to_R2_reshape_square() -> memref<64x9xi32> {
 // CHECK:       alloc() : memref<64x9xi32>
 // CHECK-NEXT:  affine.for %{{.*}} = 0 to 64 {
 // CHECK-NEXT:    affine.for %{{.*}} = 0 to 9 {
-// CHECK-NEXT:      affine.apply [[MAP0]](%{{.*}}, %{{.*}})
-// CHECK-NEXT:      affine.apply [[MAP1]](%{{.*}}, %{{.*}})
-// CHECK-NEXT:      affine.apply [[MAP2]](%{{.*}}, %{{.*}})
-// CHECK-NEXT:      affine.apply [[MAP3]](%{{.*}}, %{{.*}})
-// CHECK-NEXT:      affine.apply [[MAP4]](%{{.*}}, %{{.*}})
+// CHECK-NEXT:      affine.apply [[$MAP0]](%{{.*}}, %{{.*}})
+// CHECK-NEXT:      affine.apply [[$MAP1]](%{{.*}}, %{{.*}})
+// CHECK-NEXT:      affine.apply [[$MAP2]](%{{.*}}, %{{.*}})
+// CHECK-NEXT:      affine.apply [[$MAP3]](%{{.*}}, %{{.*}})
+// CHECK-NEXT:      affine.apply [[$MAP4]](%{{.*}}, %{{.*}})
 // CHECK-NEXT:      "foo"(%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}) : (index, index, index, index, index, index) -> i32
 // CHECK-NEXT:      affine.store %{{.*}}, %{{.*}}[0, ((%{{.*}} * 9 + %{{.*}}) mod 288) floordiv 144, (((%{{.*}} * 9 + %{{.*}}) mod 288) mod 144) floordiv 48, ((((%{{.*}} * 9 + %{{.*}}) mod 288) mod 144) mod 48) floordiv 16, ((((%{{.*}} * 9 + %{{.*}}) mod 288) mod 144) mod 48) mod 16, 0] : memref<1x2x3x3x16x1xi32>
-// CHECK-NEXT:      affine.apply [[MAP11]](%{{.*}}, %{{.*}})
-// CHECK-NEXT:      affine.apply [[MAP12]](%{{.*}})
-// CHECK-NEXT:      affine.apply [[MAP13]](%{{.*}})
-// CHECK-NEXT:      affine.apply [[MAP14]](%{{.*}})
-// CHECK-NEXT:      affine.apply [[MAP15]](%{{.*}})
-// CHECK-NEXT:      affine.apply [[MAP16]](%{{.*}})
-// CHECK-NEXT:      affine.apply [[MAP17]](%{{.*}})
+// CHECK-NEXT:      affine.apply [[$MAP11]](%{{.*}}, %{{.*}})
+// CHECK-NEXT:      affine.apply [[$MAP12]](%{{.*}})
+// CHECK-NEXT:      affine.apply [[$MAP13]](%{{.*}})
+// CHECK-NEXT:      affine.apply [[$MAP14]](%{{.*}})
+// CHECK-NEXT:      affine.apply [[$MAP15]](%{{.*}})
+// CHECK-NEXT:      affine.apply [[$MAP16]](%{{.*}})
+// CHECK-NEXT:      affine.apply [[$MAP17]](%{{.*}})
 // CHECK-NEXT:      affine.load %{{.*}}[0, ((%{{.*}} * 9 + %{{.*}}) mod 288) floordiv 144, (((%{{.*}} * 9 + %{{.*}}) mod 288) mod 144) floordiv 48, ((((%{{.*}} * 9 + %{{.*}}) mod 288) mod 144) mod 48) floordiv 16, ((((%{{.*}} * 9 + %{{.*}}) mod 288) mod 144) mod 48) mod 16, 0] : memref<1x2x3x3x16x1xi32>
 // CHECK-NEXT:      affine.store %{{.*}}, %{{.*}}[0, 0] : memref<1x1xi32>
 // CHECK-NEXT:      affine.load %{{.*}}[0, 0] : memref<1x1xi32>
@@ -785,7 +816,7 @@ func @should_fuse_at_src_depth1_and_dst_depth1() {
 }
 
 // -----
-// CHECK: [[MAP0:#map[0-9]+]] = affine_map<(d0, d1) -> (d0 * 10 + d1)>
+// CHECK: [[$MAP0:#map[0-9]*]] = affine_map<(d0, d1) -> (d0 * 10 + d1)>
 
 // CHECK-LABEL: func @should_fuse_src_depth1_at_dst_depth2
 func @should_fuse_src_depth1_at_dst_depth2() {
@@ -806,9 +837,9 @@ func @should_fuse_src_depth1_at_dst_depth2() {
   // loop IVs, so we should slice at depth 1 and insert the slice at depth 2.
   // CHECK:       affine.for %{{.*}} = 0 to 10 {
   // CHECK-NEXT:    affine.for %{{.*}} = 0 to 10 {
-  // CHECK-NEXT:      affine.apply [[MAP0]](%{{.*}}, %{{.*}})
+  // CHECK-NEXT:      affine.apply [[$MAP0]](%{{.*}}, %{{.*}})
   // CHECK-NEXT:      affine.store %{{.*}}, %{{.*}}[0] : memref<1xf32>
-  // CHECK-NEXT:      affine.apply [[MAP0]](%{{.*}}, %{{.*}})
+  // CHECK-NEXT:      affine.apply [[$MAP0]](%{{.*}}, %{{.*}})
   // CHECK-NEXT:      affine.load %{{.*}}[0] : memref<1xf32>
   // CHECK-NEXT:    }
   // CHECK-NEXT:  }
@@ -1110,8 +1141,8 @@ func @should_fuse_with_private_memrefs_with_diff_shapes() {
 
 // -----
 
-// CHECK-LABEL: func @should_not_fuse_live_out_arg(%{{.*}}: memref<10xf32>) {
-func @should_not_fuse_live_out_arg(%arg0: memref<10xf32>) {
+// CHECK-LABEL: func @should_fuse_live_out_arg_but_preserve_src_loop(%{{.*}}: memref<10xf32>) {
+func @should_fuse_live_out_arg_but_preserve_src_loop(%arg0: memref<10xf32>) {
   %cf7 = constant 7.0 : f32
 
   affine.for %i0 = 0 to 10 {
@@ -1129,6 +1160,7 @@ func @should_not_fuse_live_out_arg(%arg0: memref<10xf32>) {
   // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<10xf32>
   // CHECK-NEXT:  }
   // CHECK-NEXT:  affine.for %{{.*}} = 0 to 9 {
+  // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<10xf32>
   // CHECK-NEXT:    affine.load %{{.*}}[%{{.*}}] : memref<10xf32>
   // CHECK-NEXT:  }
   // CHECK-NEXT:  return
@@ -1160,8 +1192,8 @@ func @should_fuse_live_out_arg(%arg0: memref<10xf32>) {
 
 // -----
 
-// CHECK-LABEL: func @should_not_fuse_escaping_memref() -> memref<10xf32>
-func @should_not_fuse_escaping_memref() -> memref<10xf32> {
+// CHECK-LABEL: func @should_fuse_escaping_memref_but_preserve_src_loop() -> memref<10xf32>
+func @should_fuse_escaping_memref_but_preserve_src_loop() -> memref<10xf32> {
   %cf7 = constant 7.0 : f32
   %m = alloc() : memref<10xf32>
   affine.for %i0 = 0 to 10 {
@@ -1170,19 +1202,21 @@ func @should_not_fuse_escaping_memref() -> memref<10xf32> {
   affine.for %i1 = 0 to 9 {
     %v0 = affine.load %m[%i1] : memref<10xf32>
   }
-  // This tests that the loop nest '%{{.*}}' should not be removed after fusion
-  // because it writes to memref '%{{.*}}' which is returned by the function.
+  // This tests that the loop nest '%i0' should not be removed after fusion
+  // because it writes to memref '%m', which is returned by the function, and
+  // the '%i1' memory region does not cover '%i0' memory region.
+
   // CHECK-DAG:   alloc() : memref<10xf32>
   // CHECK:       affine.for %{{.*}} = 0 to 10 {
   // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<10xf32>
   // CHECK-NEXT:  }
   // CHECK-NEXT:  affine.for %{{.*}} = 0 to 9 {
+  // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<10xf32>
   // CHECK-NEXT:    affine.load %{{.*}}[%{{.*}}] : memref<10xf32>
   // CHECK-NEXT:  }
   // CHECK-NEXT:  return %{{.*}} : memref<10xf32>
   return %m : memref<10xf32>
 }
-
 // -----
 
 // This should fuse with the %in becoming a 1x1x1.
@@ -1210,19 +1244,19 @@ func @R3_to_R2_reshape() {
   }
   return
 }
-// CHECK-DAG: [[MAP0:#map[0-9]+]] = affine_map<(d0, d1) -> ((d0 * 3 + d1) floordiv 48)>
-// CHECK-DAG: [[MAP1:#map[0-9]+]] = affine_map<(d0, d1) -> (d0 * 3 + d1)>
-// CHECK-DAG: [[MAP2:#map[0-9]+]] = affine_map<(d0) -> (d0 floordiv 48)>
+// CHECK-DAG: [[$MAP0:#map[0-9]+]] = affine_map<(d0, d1) -> ((d0 * 3 + d1) floordiv 48)>
+// CHECK-DAG: [[$MAP1:#map[0-9]+]] = affine_map<(d0, d1) -> (d0 * 3 + d1)>
+// CHECK-DAG: [[$MAP2:#map[0-9]+]] = affine_map<(d0) -> (d0 floordiv 48)>
 
 // CHECK-LABEL: func @R3_to_R2_reshape()
 // CHECK-DAG:    alloc() : memref<1x1x1xi32>
 // CHECK:        affine.for %{{.*}} = 0 to 32 {
 // CHECK-NEXT:     affine.for %{{.*}} = 0 to 3 {
-// CHECK-NEXT:      affine.apply [[MAP0]](%{{.*}}, %{{.*}})
+// CHECK-NEXT:      affine.apply [[$MAP0]](%{{.*}}, %{{.*}})
 // CHECK-NEXT:      "foo"(%{{.*}}, %{{.*}}, %{{.*}}) : (index, index, index) -> i32
 // CHECK-NEXT:      affine.store %{{.*}}, %{{.*}}[0, 0, 0] : memref<1x1x1xi32>
-// CHECK-NEXT:      affine.apply [[MAP1]](%{{.*}}, %{{.*}})
-// CHECK-NEXT:      affine.apply [[MAP2]](%{{.*}})
+// CHECK-NEXT:      affine.apply [[$MAP1]](%{{.*}}, %{{.*}})
+// CHECK-NEXT:      affine.apply [[$MAP2]](%{{.*}})
 // CHECK-NEXT:      affine.load %{{.*}}[0, 0, 0] : memref<1x1x1xi32>
 // CHECK-NEXT:    }
 // CHECK-NEXT:  }
@@ -1230,7 +1264,7 @@ func @R3_to_R2_reshape() {
 
 // -----
 
-func @should_not_fuse_multi_output_producer() {
+func @should_fuse_multi_output_producer() {
   %a = alloc() : memref<10xf32>
   %b = alloc() : memref<10xf32>
 
@@ -1246,12 +1280,10 @@ func @should_not_fuse_multi_output_producer() {
   }
 
   // CHECK:       affine.for %{{.*}} = 0 to 10 {
-  // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<10xf32>
-  // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<10xf32>
-  // CHECK-NEXT:  }
-  // CHECK-NEXT:  affine.for %{{.*}} = 0 to 10 {
-  // CHECK-NEXT:    affine.load %{{.*}}[%{{.*}}] : memref<10xf32>
-  // CHECK-NEXT:    affine.load %{{.*}}[%{{.*}}] : memref<10xf32>
+  // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[0] : memref<1xf32>
+  // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[0] : memref<1xf32>
+  // CHECK-NEXT:    affine.load %{{.*}}[0] : memref<1xf32>
+  // CHECK-NEXT:    affine.load %{{.*}}[0] : memref<1xf32>
   // CHECK-NEXT:  }
   // CHECK-NEXT:  return
   return
@@ -1504,8 +1536,8 @@ func @should_fuse_at_depth_above_loop_carried_dependence(%arg0: memref<64x4xf32>
 
 // -----
 
-// CHECK-LABEL: func @should_fuse_after_private_memref_creation() {
-func @should_fuse_after_private_memref_creation() {
+// CHECK-LABEL: func @should_fuse_only_two_loops_and_remove_producer() {
+func @should_fuse_only_two_loops_and_remove_producer() {
   %a = alloc() : memref<10xf32>
   %b = alloc() : memref<10xf32>
 
@@ -1525,18 +1557,21 @@ func @should_fuse_after_private_memref_creation() {
 
   // On the first visit to '%i2', the fusion algorithm can not fuse loop nest
   // '%i0' into '%i2' because of the dependences '%i0' and '%i2' each have on
-  // '%i1'. However, once the loop nest '%i0' is fused into '%i1' with a
-  // private memref, the dependence between '%i0' and '%i1' on memref '%a' no
-  // longer exists, so '%i0' can now be fused into '%i2'.
-
+  // '%i1'. Then, '%i0' is fused into '%i1' and no private memref is created for
+  // memref '%a' to be able to remove '%i0' and still preserve the depencence on
+  // '%a' with '%i2'.
+  // TODO: Alternatively, we could fuse '%i0' into '%i1' with a private memref,
+  // the dependence between '%i0' and '%i1' on memref '%a' would no longer exist,
+  // and '%i0' could be fused into '%i2' as well. Note that this approach would
+  // duplicate the computation in loop nest '%i0' to loop nests '%i1' and '%i2',
+  // which would limit its profitability.
   // CHECK:       affine.for %{{.*}} = 0 to 10 {
-  // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[0] : memref<1xf32>
-  // CHECK-NEXT:    affine.load %{{.*}}[0] : memref<1xf32>
+  // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<10xf32>
+  // CHECK-NEXT:    affine.load %{{.*}}[%{{.*}}] : memref<10xf32>
   // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<10xf32>
   // CHECK-NEXT:  }
   // CHECK-NEXT:  affine.for %{{.*}} = 0 to 10 {
-  // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[0] : memref<1xf32>
-  // CHECK-NEXT:    affine.load %{{.*}}[0] : memref<1xf32>
+  // CHECK-NEXT:    affine.load %{{.*}}[%{{.*}}] : memref<10xf32>
   // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<10xf32>
   // CHECK-NEXT:  }
   // CHECK-NEXT:   return
@@ -1652,8 +1687,8 @@ func @should_fuse_live_out_writer(%arg0 : memref<10xf32>) -> memref<10xf32> {
 
 // The fused slice has 16 iterations from along %i0.
 
-// CHECK-DAG: [[MAP_LB:#map[0-9]+]] = affine_map<(d0) -> (d0 * 16)>
-// CHECK-DAG: [[MAP_UB:#map[0-9]+]] = affine_map<(d0) -> (d0 * 16 + 16)>
+// CHECK-DAG: [[$MAP_LB:#map[0-9]+]] = affine_map<(d0) -> (d0 * 16)>
+// CHECK-DAG: [[$MAP_UB:#map[0-9]+]] = affine_map<(d0) -> (d0 * 16 + 16)>
 
 // CHECK-LABEL: slice_tile
 func @slice_tile(%arg0: memref<128x8xf32>, %arg1: memref<32x8xf32>, %0 : f32) -> memref<32x8xf32> {
@@ -1681,7 +1716,7 @@ func @slice_tile(%arg0: memref<128x8xf32>, %arg1: memref<32x8xf32>, %0 : f32) ->
 }
 // CHECK:       affine.for %{{.*}} = 0 to 2 {
 // CHECK-NEXT:    affine.for %{{.*}} = 0 to 8 {
-// CHECK-NEXT:      affine.for %{{.*}} = [[MAP_LB]](%{{.*}}) to [[MAP_UB]](%{{.*}}) {
+// CHECK-NEXT:      affine.for %{{.*}} = [[$MAP_LB]](%{{.*}}) to [[$MAP_UB]](%{{.*}}) {
 // CHECK-NEXT:        affine.store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}] : memref<32x8xf32>
 // CHECK-NEXT:      }
 // CHECK-NEXT:      affine.for %{{.*}} = 0 to 8 {
@@ -1935,16 +1970,16 @@ func @fuse_across_dim_mismatch(%arg0: memref<4x4x16x1xf32>, %arg1: memref<144x9x
   }
   return
 }
-// MAXIMAL:      #map0 = affine_map<(d0, d1) -> (d0 * 16 + d1)>
+// MAXIMAL:      #map = affine_map<(d0, d1) -> (d0 * 16 + d1)>
 // MAXIMAL-LABEL: func @fuse_across_dim_mismatch
 // MAXIMAL:        alloc() : memref<1x1xf32>
 // MAXIMAL:        affine.for %{{.*}} = 0 to 9 {
 // MAXIMAL-NEXT:    affine.for %{{.*}} = 0 to 9 {
 // MAXIMAL-NEXT:      affine.for %{{.*}} = 0 to 4 {
 // MAXIMAL-NEXT:        affine.for %{{.*}} = 0 to 16 {
-// MAXIMAL-NEXT:          affine.apply #map0(%{{.*}}, %{{.*}})
+// MAXIMAL-NEXT:          affine.apply #map(%{{.*}}, %{{.*}})
 // MAXIMAL-NEXT:          affine.store %{{.*}}, %{{.*}}[0, 0] : memref<1x1xf32>
-// MAXIMAL-NEXT:          affine.apply #map0(%{{.*}}, %{{.*}})
+// MAXIMAL-NEXT:          affine.apply #map(%{{.*}}, %{{.*}})
 // MAXIMAL-NEXT:          affine.load %{{.*}}[0, 0] : memref<1x1xf32>
 // MAXIMAL-NEXT:        }
 // MAXIMAL-NEXT:      }
@@ -2001,13 +2036,13 @@ func @fuse_across_varying_dims_complex(%arg0: f32) {
   }
   return
 }
-// MAXIMAL-DAG: [[MAP0:#map[0-9]+]] = affine_map<(d0, d1) -> ((d0 * 72 + d1) floordiv 2304)>
-// MAXIMAL-DAG: [[MAP1:#map[0-9]+]] = affine_map<(d0, d1) -> (((d0 * 72 + d1) mod 2304) floordiv 1152)>
-// MAXIMAL-DAG: [[MAP2:#map[0-9]+]] = affine_map<(d0, d1) -> (((((d0 * 72 + d1) mod 2304) mod 1152) floordiv 9) floordiv 8)>
-// MAXIMAL-DAG: [[MAP3:#map[0-9]+]] = affine_map<(d0, d1) -> (((((d0 * 72 + d1) mod 2304) mod 1152) mod 9) floordiv 3)>
-// MAXIMAL-DAG: [[MAP4:#map[0-9]+]] = affine_map<(d0, d1) -> (((((d0 * 72 + d1) mod 2304) mod 1152) mod 9) mod 3)>
-// MAXIMAL-DAG: [[MAP7:#map[0-9]+]] = affine_map<(d0, d1) -> (d0 * 16 + d1)>
-// MAXIMAL-DAG: [[MAP8:#map[0-9]+]] = affine_map<(d0, d1) -> (d0 * 16 - d1 + 15)>
+// MAXIMAL-DAG: [[$MAP0:#map[0-9]+]] = affine_map<(d0, d1) -> ((d0 * 72 + d1) floordiv 2304)>
+// MAXIMAL-DAG: [[$MAP1:#map[0-9]+]] = affine_map<(d0, d1) -> (((d0 * 72 + d1) mod 2304) floordiv 1152)>
+// MAXIMAL-DAG: [[$MAP2:#map[0-9]+]] = affine_map<(d0, d1) -> (((((d0 * 72 + d1) mod 2304) mod 1152) floordiv 9) floordiv 8)>
+// MAXIMAL-DAG: [[$MAP3:#map[0-9]+]] = affine_map<(d0, d1) -> (((((d0 * 72 + d1) mod 2304) mod 1152) mod 9) floordiv 3)>
+// MAXIMAL-DAG: [[$MAP4:#map[0-9]+]] = affine_map<(d0, d1) -> (((((d0 * 72 + d1) mod 2304) mod 1152) mod 9) mod 3)>
+// MAXIMAL-DAG: [[$MAP7:#map[0-9]+]] = affine_map<(d0, d1) -> (d0 * 16 + d1)>
+// MAXIMAL-DAG: [[$MAP8:#map[0-9]+]] = affine_map<(d0, d1) -> (d0 * 16 - d1 + 15)>
 // MAXIMAL-LABEL: func @fuse_across_varying_dims_complex
 // MAXIMAL-NEXT:  alloc() : memref<64x1xf32>
 // MAXIMAL-NEXT:  constant 0 : index
@@ -2018,25 +2053,25 @@ func @fuse_across_varying_dims_complex(%arg0: f32) {
 // MAXIMAL-NEXT:      affine.for %{{.*}} = 0 to 4 {
 // MAXIMAL-NEXT:        affine.for %{{.*}} = 0 to 16 {
 // MAXIMAL-NEXT:          affine.for %{{.*}} = 0 to 64 {
-// MAXIMAL-NEXT:            affine.apply [[MAP0]](%{{.*}}, %{{.*}})
-// MAXIMAL-NEXT:            affine.apply [[MAP1]](%{{.*}}, %{{.*}})
-// MAXIMAL-NEXT:            affine.apply [[MAP2]](%{{.*}}, %{{.*}})
-// MAXIMAL-NEXT:            affine.apply [[MAP3]](%{{.*}}, %{{.*}})
-// MAXIMAL-NEXT:            affine.apply [[MAP4]](%{{.*}}, %{{.*}})
+// MAXIMAL-NEXT:            affine.apply [[$MAP0]](%{{.*}}, %{{.*}})
+// MAXIMAL-NEXT:            affine.apply [[$MAP1]](%{{.*}}, %{{.*}})
+// MAXIMAL-NEXT:            affine.apply [[$MAP2]](%{{.*}}, %{{.*}})
+// MAXIMAL-NEXT:            affine.apply [[$MAP3]](%{{.*}}, %{{.*}})
+// MAXIMAL-NEXT:            affine.apply [[$MAP4]](%{{.*}}, %{{.*}})
 // MAXIMAL-NEXT:            affine.load %{{.*}}[%{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}] : memref<2x2x3x3x16x1xf32>
 // MAXIMAL-NEXT:            affine.store %{{.*}}, %{{.*}}[%{{.*}}, 0] : memref<64x1xf32>
 // MAXIMAL-NEXT:          }
 // MAXIMAL-NEXT:          affine.for %{{.*}} = 0 to 4 {
 // MAXIMAL-NEXT:            affine.for %{{.*}} = 0 to 16 {
-// MAXIMAL-NEXT:              affine.apply [[MAP7]](%{{.*}}, %{{.*}})
+// MAXIMAL-NEXT:              affine.apply [[$MAP7]](%{{.*}}, %{{.*}})
 // MAXIMAL-NEXT:              affine.load %{{.*}}[%{{.*}} * 16 + %{{.*}}, 0] : memref<64x1xf32>
 // MAXIMAL-NEXT:            }
 // MAXIMAL-NEXT:            affine.for %{{.*}} = 0 to 16 {
-// MAXIMAL-NEXT:              affine.apply [[MAP7]](%{{.*}}, %{{.*}})
+// MAXIMAL-NEXT:              affine.apply [[$MAP7]](%{{.*}}, %{{.*}})
 // MAXIMAL-NEXT:              affine.store %{{.*}}, %{{.*}}[%{{.*}}, %{{.*}}] : memref<144x4xf32>
 // MAXIMAL-NEXT:            }
 // MAXIMAL-NEXT:          }
-// MAXIMAL-NEXT:          affine.apply [[MAP8]](%{{.*}}, %{{.*}})
+// MAXIMAL-NEXT:          affine.apply [[$MAP8]](%{{.*}}, %{{.*}})
 // MAXIMAL-NEXT:          affine.load %{{.*}}[%{{.*}} * 16 - %{{.*}} + 15, 0] : memref<64x1xf32>
 // MAXIMAL-NEXT:        }
 // MAXIMAL-NEXT:      }
@@ -2220,7 +2255,7 @@ func @affine_2_dependent_mm_fused(%arg0: memref<1024x1024xf32>, %arg1: memref<10
     }
   }
 
-  // CHECK:  affine.for %{{.*}} = 0 to 1024 {
+  // CHECK:        affine.for %{{.*}} = 0 to 1024 {
   // CHECK-NEXT:     affine.for %{{.*}} = 0 to 1024 {
   // CHECK-NEXT:       affine.for %{{.*}} = 0 to 1024 {
   // CHECK-NEXT:         affine.load %{{.*}}[%{{.*}}, %{{.*}}] : memref<1024x1024xf32>
@@ -2311,8 +2346,8 @@ func @should_fuse_function_live_out_multi_store_producer(%live_in_out_m : memref
   }
   // CHECK:      affine.for %[[i0:.*]] = 0 to 10 {
   // CHECK-NEXT:   affine.store %{{.*}}, %{{.*}}[%[[i0]]] : memref<10xf32>
-  // CHECK-NEXT:   affine.store %{{.*}}, %{{.*}}[%[[i0]]] : memref<10xf32>
-  // CHECK-NEXT:   affine.load %{{.*}}[%[[i0]]] : memref<10xf32>
+  // CHECK-NEXT:   affine.store %{{.*}}, %{{.*}}[0] : memref<1xf32>
+  // CHECK-NEXT:   affine.load %{{.*}}[0] : memref<1xf32>
   // CHECK-NEXT: }
   // CHECK-NEXT: return
   return
@@ -2373,12 +2408,11 @@ func @mul_add_0(%arg0: memref<3x4xf32>, %arg1: memref<4x3xf32>, %arg2: memref<3x
 
 // -----
 
-// Verify that 'fuseProducerConsumerNodes' doesn't fuse a producer loop with
-// a store that has multiple outgoing edges. Sibling loop fusion should not fuse
-// any of these loops due to dependencies on external memref '%a'.
+// Verify that 'fuseProducerConsumerNodes' fuse a producer loop with a store
+// that has multiple outgoing edges.
 
-// CHECK-LABEL: func @should_not_fuse_multi_outgoing_edge_store_producer1
-func @should_not_fuse_multi_outgoing_edge_store_producer1(%a : memref<1xf32>) {
+// CHECK-LABEL: func @should_fuse_multi_outgoing_edge_store_producer
+func @should_fuse_multi_outgoing_edge_store_producer(%a : memref<1xf32>) {
   %cst = constant 0.000000e+00 : f32
   affine.for %arg0 = 0 to 1 {
     affine.store %cst, %a[%arg0] : memref<1xf32>
@@ -2391,9 +2425,12 @@ func @should_not_fuse_multi_outgoing_edge_store_producer1(%a : memref<1xf32>) {
   affine.for %arg0 = 0 to 1 {
     %0 = affine.load %a[%arg0] : memref<1xf32>
   }
-  // CHECK: affine.for %{{.*}} = 0 to 1
-  // CHECK: affine.for %{{.*}} = 0 to 1
-  // CHECK: affine.for %{{.*}} = 0 to 1
+  // CHECK:      affine.for %{{.*}} = 0 to 1 {
+  // CHECK-NEXT:   affine.store
+  // CHECK-NEXT:   affine.load
+  // CHECK-NEXT:   affine.load
+  // CHECK-NEXT: }
+
   return
 }
 
@@ -2493,3 +2530,279 @@ func @vector_loop(%a : memref<10x20xf32>, %b : memref<10x20xf32>,
 // CHECK-NEXT:     affine.vector_load
 // CHECK-NEXT:     affine.vector_store
 // CHECK-NOT:  affine.for
+
+// -----
+
+// CHECK-LABEL: func @multi_outgoing_edges
+func @multi_outgoing_edges(%in0 : memref<32xf32>,
+                      %in1 : memref<32xf32>) {
+  affine.for %d = 0 to 32 {
+    %lhs = affine.load %in0[%d] : memref<32xf32>
+    %rhs = affine.load %in1[%d] : memref<32xf32>
+    %add = addf %lhs, %rhs : f32
+    affine.store %add, %in0[%d] : memref<32xf32>
+  }
+  affine.for %d = 0 to 32 {
+    %lhs = affine.load %in0[%d] : memref<32xf32>
+    %rhs = affine.load %in1[%d] : memref<32xf32>
+    %add = subf %lhs, %rhs : f32
+    affine.store %add, %in0[%d] : memref<32xf32>
+  }
+  affine.for %d = 0 to 32 {
+    %lhs = affine.load %in0[%d] : memref<32xf32>
+    %rhs = affine.load %in1[%d] : memref<32xf32>
+    %add = mulf %lhs, %rhs : f32
+    affine.store %add, %in0[%d] : memref<32xf32>
+  }
+  affine.for %d = 0 to 32 {
+    %lhs = affine.load %in0[%d] : memref<32xf32>
+    %rhs = affine.load %in1[%d] : memref<32xf32>
+    %add = divf %lhs, %rhs : f32
+    affine.store %add, %in0[%d] : memref<32xf32>
+  }
+  return
+}
+
+// CHECK:      affine.for
+// CHECK-NOT:  affine.for
+// CHECK:        addf
+// CHECK-NOT:  affine.for
+// CHECK:        subf
+// CHECK-NOT:  affine.for
+// CHECK:        mulf
+// CHECK-NOT:  affine.for
+// CHECK:        divf
+
+// -----
+
+// Test fusion when dynamically shaped memrefs are used with constant trip count loops.
+
+// CHECK-LABEL: func @calc
+func @calc(%arg0: memref<?xf32>, %arg1: memref<?xf32>, %arg2: memref<?xf32>, %len: index) {
+  %c1 = constant 1 : index
+  %1 = alloc(%len) : memref<?xf32>
+  affine.for %arg4 = 1 to 10 {
+    %7 = affine.load %arg0[%arg4] : memref<?xf32>
+    %8 = affine.load %arg1[%arg4] : memref<?xf32>
+    %9 = addf %7, %8 : f32
+    affine.store %9, %1[%arg4] : memref<?xf32>
+  }
+  affine.for %arg4 = 1 to 10 {
+    %7 = affine.load %1[%arg4] : memref<?xf32>
+    %8 = affine.load %arg1[%arg4] : memref<?xf32>
+    %9 = mulf %7, %8 : f32
+    affine.store %9, %arg2[%arg4] : memref<?xf32>
+  }
+  return
+}
+// CHECK:       alloc() : memref<1xf32>
+// CHECK:       affine.for %arg{{.*}} = 1 to 10 {
+// CHECK-NEXT:    affine.load %arg{{.*}}
+// CHECK-NEXT:    affine.load %arg{{.*}}
+// CHECK-NEXT:    addf
+// CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[0] : memref<1xf32>
+// CHECK-NEXT:    affine.load %{{.*}}[0] : memref<1xf32>
+// CHECK-NEXT:    affine.load %arg{{.*}}[%arg{{.*}}] : memref<?xf32>
+// CHECK-NEXT:    mulf
+// CHECK-NEXT:    affine.store %{{.*}}, %arg{{.*}}[%arg{{.*}}] : memref<?xf32>
+// CHECK-NEXT:  }
+// CHECK-NEXT:  return
+
+// -----
+
+// CHECK-LABEL: func @should_not_fuse_since_non_affine_users
+func @should_not_fuse_since_non_affine_users(%in0 : memref<32xf32>,
+                      %in1 : memref<32xf32>) {
+  affine.for %d = 0 to 32 {
+    %lhs = affine.load %in0[%d] : memref<32xf32>
+    %rhs = affine.load %in1[%d] : memref<32xf32>
+    %add = addf %lhs, %rhs : f32
+    affine.store %add, %in0[%d] : memref<32xf32>
+  }
+  affine.for %d = 0 to 32 {
+    %lhs = load %in0[%d] : memref<32xf32>
+    %rhs = load %in1[%d] : memref<32xf32>
+    %add = subf %lhs, %rhs : f32
+    store %add, %in0[%d] : memref<32xf32>
+  }
+  affine.for %d = 0 to 32 {
+    %lhs = affine.load %in0[%d] : memref<32xf32>
+    %rhs = affine.load %in1[%d] : memref<32xf32>
+    %add = mulf %lhs, %rhs : f32
+    affine.store %add, %in0[%d] : memref<32xf32>
+  }
+  return
+}
+
+// CHECK:  affine.for
+// CHECK:    addf
+// CHECK:  affine.for
+// CHECK:    subf
+// CHECK:  affine.for
+// CHECK:    mulf
+
+// -----
+
+// CHECK-LABEL: func @should_not_fuse_since_top_level_non_affine_users
+func @should_not_fuse_since_top_level_non_affine_users(%in0 : memref<32xf32>,
+                      %in1 : memref<32xf32>) {
+  %sum = alloc() : memref<f32>
+  affine.for %d = 0 to 32 {
+    %lhs = affine.load %in0[%d] : memref<32xf32>
+    %rhs = affine.load %in1[%d] : memref<32xf32>
+    %add = addf %lhs, %rhs : f32
+    store %add, %sum[] : memref<f32>
+    affine.store %add, %in0[%d] : memref<32xf32>
+  }
+  %load_sum = load %sum[] : memref<f32>
+  affine.for %d = 0 to 32 {
+    %lhs = affine.load %in0[%d] : memref<32xf32>
+    %rhs = affine.load %in1[%d] : memref<32xf32>
+    %add = mulf %lhs, %rhs : f32
+    %sub = subf %add, %load_sum: f32
+    affine.store %sub, %in0[%d] : memref<32xf32>
+  }
+  dealloc %sum : memref<f32>
+  return
+}
+
+// CHECK:  affine.for
+// CHECK:    addf
+// CHECK:  affine.for
+// CHECK:    mulf
+// CHECK:    subf
+
+// -----
+
+// MAXIMAL-LABEL: func @fuse_minor_affine_map
+func @fuse_minor_affine_map(%in: memref<128xf32>, %out: memref<20x512xf32>) {
+  %tmp = alloc() : memref<128xf32>
+
+  affine.for %arg4 = 0 to 128 {
+    %ld = affine.load %in[%arg4] : memref<128xf32>
+    affine.store %ld, %tmp[%arg4] : memref<128xf32>
+  }
+
+  affine.for %arg3 = 0 to 20 {
+    affine.for %arg4 = 0 to 512 {
+      %ld = affine.load %tmp[%arg4 mod 128] : memref<128xf32>
+      affine.store %ld, %out[%arg3, %arg4] : memref<20x512xf32>
+    }
+  }
+
+  return
+}
+
+// TODO: The size of the private memref is not properly computed in the presence
+// of the 'mod' operation. It should be memref<1xf32> instead of
+// memref<128xf32>: https://bugs.llvm.org/show_bug.cgi?id=46973
+// MAXIMAL:       alloc() : memref<128xf32>
+// MAXIMAL:       affine.for
+// MAXIMAL-NEXT:    affine.for
+// MAXIMAL-NOT:   affine.for
+// MAXIMAL:       return
+
+// -----
+
+// CHECK-LABEL: func @should_fuse_multi_store_producer_and_privatize_memfefs
+func @should_fuse_multi_store_producer_and_privatize_memfefs() {
+  %a = alloc() : memref<10xf32>
+  %b = alloc() : memref<10xf32>
+  %c = alloc() : memref<10xf32>
+  %cst = constant 0.000000e+00 : f32
+  affine.for %arg0 = 0 to 10 {
+    affine.store %cst, %a[%arg0] : memref<10xf32>
+    affine.store %cst, %b[%arg0] : memref<10xf32>
+    affine.store %cst, %c[%arg0] : memref<10xf32>
+    %0 = affine.load %c[%arg0] : memref<10xf32>
+  }
+
+  affine.for %arg0 = 0 to 10 {
+    %0 = affine.load %a[%arg0] : memref<10xf32>
+  }
+
+  affine.for %arg0 = 0 to 10 {
+    %0 = affine.load %b[%arg0] : memref<10xf32>
+  }
+
+	// All the memrefs should be privatized except '%c', which is not involved in
+  // the producer-consumer fusion.
+  // CHECK:      affine.for %{{.*}} = 0 to 10 {
+  // CHECK-NEXT:   affine.store %{{.*}}, %{{.*}}[0] : memref<1xf32>
+  // CHECK-NEXT:   affine.store %{{.*}}, %{{.*}}[0] : memref<1xf32>
+  // CHECK-NEXT:   affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<10xf32>
+  // CHECK-NEXT:   affine.load %{{.*}}[%{{.*}}] : memref<10xf32>
+  // CHECK-NEXT:   affine.load %{{.*}}[0] : memref<1xf32>
+  // CHECK-NEXT:   affine.load %{{.*}}[0] : memref<1xf32>
+  // CHECK-NEXT: }
+
+  return
+}
+
+// -----
+
+func @should_fuse_multi_store_producer_with_scaping_memrefs_and_remove_src(
+    %a : memref<10xf32>, %b : memref<10xf32>) {
+  %cst = constant 0.000000e+00 : f32
+  affine.for %i0 = 0 to 10 {
+    affine.store %cst, %a[%i0] : memref<10xf32>
+    affine.store %cst, %b[%i0] : memref<10xf32>
+  }
+
+  affine.for %i1 = 0 to 10 {
+    %0 = affine.load %a[%i1] : memref<10xf32>
+  }
+
+  affine.for %i2 = 0 to 10 {
+    %0 = affine.load %b[%i2] : memref<10xf32>
+  }
+
+	// Producer loop '%i0' should be removed after fusion since fusion is maximal.
+  // No memref should be privatized since they escape the function.
+  // CHECK:       affine.for %{{.*}} = 0 to 10 {
+  // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<10xf32>
+  // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<10xf32>
+  // CHECK-NEXT:    affine.load %{{.*}}[%{{.*}}] : memref<10xf32>
+  // CHECK-NEXT:    affine.load %{{.*}}[%{{.*}}] : memref<10xf32>
+  // CHECK-NEXT:  }
+  // CHECK-NOT:   affine.for
+
+  return
+}
+
+// -----
+
+func @should_fuse_multi_store_producer_with_scaping_memrefs_and_preserve_src(
+    %a : memref<10xf32>, %b : memref<10xf32>) {
+  %cst = constant 0.000000e+00 : f32
+  affine.for %i0 = 0 to 10 {
+    affine.store %cst, %a[%i0] : memref<10xf32>
+    affine.store %cst, %b[%i0] : memref<10xf32>
+  }
+
+  affine.for %i1 = 0 to 5 {
+    %0 = affine.load %a[%i1] : memref<10xf32>
+  }
+
+  affine.for %i2 = 0 to 10 {
+    %0 = affine.load %b[%i2] : memref<10xf32>
+  }
+
+	// Loops '%i0' and '%i2' should be fused first and '%i0' should be removed
+  // since fusion is maximal. Then the fused loop and '%i1' should be fused
+  // and the fused loop shouldn't be removed since fusion is not maximal.
+  // CHECK:       affine.for %{{.*}} = 0 to 10 {
+  // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<10xf32>
+  // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<10xf32>
+  // CHECK-NEXT:    affine.load %{{.*}}[%{{.*}}] : memref<10xf32>
+  // CHECK-NEXT:  }
+  // CHECK:       affine.for %{{.*}} = 0 to 5 {
+  // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<10xf32>
+  // CHECK-NEXT:    affine.store %{{.*}}, %{{.*}}[%{{.*}}] : memref<10xf32>
+  // CHECK-NEXT:    affine.load %{{.*}}[%{{.*}}] : memref<10xf32>
+  // CHECK-NEXT:    affine.load %{{.*}}[%{{.*}}] : memref<10xf32>
+  // CHECK-NEXT:  }
+  // CHECK-NOT:   affine.for
+
+  return
+}

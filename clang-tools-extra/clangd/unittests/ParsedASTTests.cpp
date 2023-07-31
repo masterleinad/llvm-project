@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../clang-tidy/ClangTidyCheck.h"
 #include "../../clang-tidy/ClangTidyModule.h"
 #include "../../clang-tidy/ClangTidyModuleRegistry.h"
 #include "AST.h"
@@ -23,6 +24,7 @@
 #include "SourceCode.h"
 #include "TestFS.h"
 #include "TestTU.h"
+#include "TidyProvider.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/SourceManager.h"
@@ -48,6 +50,17 @@ using ::testing::ElementsAreArray;
 MATCHER_P(DeclNamed, Name, "") {
   if (NamedDecl *ND = dyn_cast<NamedDecl>(arg))
     if (ND->getName() == Name)
+      return true;
+  if (auto *Stream = result_listener->stream()) {
+    llvm::raw_os_ostream OS(*Stream);
+    arg->dump(OS);
+  }
+  return false;
+}
+
+MATCHER_P(DeclKind, Kind, "") {
+  if (NamedDecl *ND = dyn_cast<NamedDecl>(arg))
+    if (ND->getDeclKindName() == llvm::StringRef(Kind))
       return true;
   if (auto *Stream = result_listener->stream()) {
     llvm::raw_os_ostream OS(*Stream);
@@ -98,9 +111,15 @@ TEST(ParsedASTTest, TopLevelDecls) {
     int header1();
     int header2;
   )";
-  TU.Code = "int main();";
+  TU.Code = R"cpp(
+    int main();
+    template <typename> bool X = true;
+  )cpp";
   auto AST = TU.build();
-  EXPECT_THAT(AST.getLocalTopLevelDecls(), ElementsAre(DeclNamed("main")));
+  EXPECT_THAT(AST.getLocalTopLevelDecls(),
+              testing::UnorderedElementsAreArray(
+                  {AllOf(DeclNamed("main"), DeclKind("Function")),
+                   AllOf(DeclNamed("X"), DeclKind("VarTemplate"))}));
 }
 
 TEST(ParsedASTTest, DoesNotGetIncludedTopDecls) {
@@ -232,7 +251,7 @@ TEST(ParsedASTTest, NoCrashOnTokensWithTidyCheck) {
   TestTU TU;
   // this check runs the preprocessor, we need to make sure it does not break
   // our recording logic.
-  TU.ClangTidyChecks = "modernize-use-trailing-return-type";
+  TU.ClangTidyProvider = addTidyChecks("modernize-use-trailing-return-type");
   TU.Code = "inline int foo() {}";
 
   auto AST = TU.build();
@@ -249,11 +268,11 @@ TEST(ParsedASTTest, NoCrashOnTokensWithTidyCheck) {
 }
 
 TEST(ParsedASTTest, CanBuildInvocationWithUnknownArgs) {
-  MockFSProvider FSProvider;
-  FSProvider.Files = {{testPath("foo.cpp"), "void test() {}"}};
+  MockFS FS;
+  FS.Files = {{testPath("foo.cpp"), "void test() {}"}};
   // Unknown flags should not prevent a build of compiler invocation.
   ParseInputs Inputs;
-  Inputs.FSProvider = &FSProvider;
+  Inputs.TFS = &FS;
   Inputs.CompileCommand.CommandLine = {"clang", "-fsome-unknown-flag",
                                        testPath("foo.cpp")};
   IgnoreDiagnostics IgnoreDiags;
@@ -322,10 +341,10 @@ TEST(ParsedASTTest, CollectsMainFileMacroExpansions) {
   std::vector<Position> MacroExpansionPositions;
   for (const auto &SIDToRefs : AST.getMacros().MacroRefs) {
     for (const auto &R : SIDToRefs.second)
-      MacroExpansionPositions.push_back(R.start);
+      MacroExpansionPositions.push_back(R.Rng.start);
   }
   for (const auto &R : AST.getMacros().UnknownMacros)
-    MacroExpansionPositions.push_back(R.start);
+    MacroExpansionPositions.push_back(R.Rng.start);
   EXPECT_THAT(MacroExpansionPositions,
               testing::UnorderedElementsAreArray(TestCase.points()));
 }
@@ -388,7 +407,7 @@ TEST(ParsedASTTest, ReplayPreambleForTidyCheckers) {
       "replay-preamble-module", "");
   TestTU TU;
   // This check records inclusion directives replayed by clangd.
-  TU.ClangTidyChecks = "replay-preamble-check";
+  TU.ClangTidyProvider = addTidyChecks("replay-preamble-check");
   llvm::Annotations Test(R"cpp(
     $hash^#$include[[import]] $filebegin^"$filerange[[bar.h]]"
     $hash^#$include[[include_next]] $filebegin^"$filerange[[baz.h]]"
@@ -444,24 +463,76 @@ TEST(ParsedASTTest, ReplayPreambleForTidyCheckers) {
     EXPECT_EQ(SkippedFiles[I].kind(), tok::header_name);
   }
 
+  TU.AdditionalFiles["a.h"] = "";
+  TU.AdditionalFiles["b.h"] = "";
+  TU.AdditionalFiles["c.h"] = "";
   // Make sure replay logic works with patched preambles.
-  TU.Code = "";
-  StoreDiags Diags;
-  MockFSProvider FS;
+  llvm::StringLiteral Baseline = R"cpp(
+    #include "a.h"
+    #include "c.h")cpp";
+  MockFS FS;
+  TU.Code = Baseline.str();
   auto Inputs = TU.inputs(FS);
-  auto CI = buildCompilerInvocation(Inputs, Diags);
-  auto EmptyPreamble =
-      buildPreamble(testPath(TU.Filename), *CI, Inputs, true, nullptr);
-  ASSERT_TRUE(EmptyPreamble);
-  TU.Code = "#include <a.h>";
+  auto BaselinePreamble = TU.preamble();
+  ASSERT_TRUE(BaselinePreamble);
+
+  // First make sure we don't crash on various modifications to the preamble.
+  llvm::StringLiteral Cases[] = {
+      // clang-format off
+      // New include in middle.
+      R"cpp(
+        #include "a.h"
+        #include "b.h"
+        #include "c.h")cpp",
+      // New include at top.
+      R"cpp(
+        #include "b.h"
+        #include "a.h"
+        #include "c.h")cpp",
+      // New include at bottom.
+      R"cpp(
+        #include "a.h"
+        #include "c.h"
+        #include "b.h")cpp",
+      // Same size with a missing include.
+      R"cpp(
+        #include "a.h"
+        #include "b.h")cpp",
+      // Smaller with no new includes.
+      R"cpp(
+        #include "a.h")cpp",
+      // Smaller with a new includes.
+      R"cpp(
+        #include "b.h")cpp",
+      // clang-format on
+  };
+  for (llvm::StringLiteral Case : Cases) {
+    TU.Code = Case.str();
+
+    IgnoreDiagnostics Diags;
+    auto CI = buildCompilerInvocation(TU.inputs(FS), Diags);
+    auto PatchedAST = ParsedAST::build(testPath(TU.Filename), TU.inputs(FS),
+                                       std::move(CI), {}, BaselinePreamble);
+    ASSERT_TRUE(PatchedAST);
+    EXPECT_TRUE(PatchedAST->getDiagnostics().empty());
+  }
+
+  // Then ensure correctness by making sure includes were seen only once.
+  // Note that we first see the includes from the patch, as preamble includes
+  // are replayed after exiting the built-in file.
   Includes.clear();
+  TU.Code = R"cpp(
+    #include "a.h"
+    #include "b.h")cpp";
+  IgnoreDiagnostics Diags;
+  auto CI = buildCompilerInvocation(TU.inputs(FS), Diags);
   auto PatchedAST = ParsedAST::build(testPath(TU.Filename), TU.inputs(FS),
-                                     std::move(CI), {}, EmptyPreamble);
+                                     std::move(CI), {}, BaselinePreamble);
   ASSERT_TRUE(PatchedAST);
-  // Make sure includes were seen only once.
+  EXPECT_TRUE(PatchedAST->getDiagnostics().empty());
   EXPECT_THAT(Includes,
               ElementsAre(WithFileName(testPath("__preamble_patch__.h")),
-                          WithFileName("a.h")));
+                          WithFileName("b.h"), WithFileName("a.h")));
 }
 
 TEST(ParsedASTTest, PatchesAdditionalIncludes) {
@@ -487,7 +558,7 @@ TEST(ParsedASTTest, PatchesAdditionalIncludes) {
   // Build preamble with no includes.
   TU.Code = "";
   StoreDiags Diags;
-  MockFSProvider FS;
+  MockFS FS;
   auto Inputs = TU.inputs(FS);
   auto CI = buildCompilerInvocation(Inputs, Diags);
   auto EmptyPreamble =
@@ -530,7 +601,7 @@ TEST(ParsedASTTest, PatchesDeletedIncludes) {
   // Build preamble with no includes.
   TU.Code = R"cpp(#include <foo.h>)cpp";
   StoreDiags Diags;
-  MockFSProvider FS;
+  MockFS FS;
   auto Inputs = TU.inputs(FS);
   auto CI = buildCompilerInvocation(Inputs, Diags);
   auto BaselinePreamble =

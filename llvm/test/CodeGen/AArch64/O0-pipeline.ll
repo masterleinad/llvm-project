@@ -37,6 +37,7 @@
 ; CHECK-NEXT:       AArch64PreLegalizerCombiner
 ; CHECK-NEXT:       Analysis containing CSE Info
 ; CHECK-NEXT:       Legalizer
+; CHECK-NEXT:       AArch64PostLegalizerLowering
 ; CHECK-NEXT:       RegBankSelect
 ; CHECK-NEXT:       Localizer
 ; CHECK-NEXT:       Analysis for ComputingKnownBits
@@ -55,6 +56,8 @@
 ; CHECK-NEXT:       Post-RA pseudo instruction expansion pass
 ; CHECK-NEXT:       AArch64 pseudo instruction expansion pass
 ; CHECK-NEXT:       AArch64 speculation hardening pass
+; CHECK-NEXT:       AArch64 Indirect Thunks
+; CHECK-NEXT:       AArch64 sls hardening pass
 ; CHECK-NEXT:       Analyze Machine Code For Garbage Collection
 ; CHECK-NEXT:       Insert fentry calls
 ; CHECK-NEXT:       Insert XRay ops

@@ -11,6 +11,7 @@
 
 #include "Gnu.h"
 #include "ROCm.h"
+#include "clang/Basic/TargetID.h"
 #include "clang/Driver/Options.h"
 #include "clang/Driver/Tool.h"
 #include "clang/Driver/ToolChain.h"
@@ -25,9 +26,9 @@ namespace driver {
 namespace tools {
 namespace amdgpu {
 
-class LLVM_LIBRARY_VISIBILITY Linker : public GnuTool {
+class LLVM_LIBRARY_VISIBILITY Linker : public Tool {
 public:
-  Linker(const ToolChain &TC) : GnuTool("amdgpu::Linker", "ld.lld", TC) {}
+  Linker(const ToolChain &TC) : Tool("amdgpu::Linker", "ld.lld", TC) {}
   bool isLinkJob() const override { return true; }
   bool hasIntegratedCPP() const override { return false; }
   void ConstructJob(Compilation &C, const JobAction &JA,
@@ -36,7 +37,8 @@ public:
                     const char *LinkingOutput) const override;
 };
 
-void getAMDGPUTargetFeatures(const Driver &D, const llvm::opt::ArgList &Args,
+void getAMDGPUTargetFeatures(const Driver &D, const llvm::Triple &Triple,
+                             const llvm::opt::ArgList &Args,
                              std::vector<StringRef> &Features);
 
 } // end namespace amdgpu
@@ -80,12 +82,26 @@ public:
 
   static bool isWave64(const llvm::opt::ArgList &DriverArgs,
                        llvm::AMDGPU::GPUKind Kind);
+  /// Needed for using lto.
+  bool HasNativeLLVMSupport() const override {
+    return true;
+  }
+
+  /// Needed for translating LTO options.
+  const char *getDefaultLinker() const override { return "ld.lld"; }
+
+  /// Should skip argument.
+  bool shouldSkipArgument(const llvm::opt::Arg *Arg) const;
+
+protected:
+  /// Check and diagnose invalid target ID specified by -mcpu.
+  void checkTargetID(const llvm::opt::ArgList &DriverArgs) const;
+
+  /// Get GPU arch from -mcpu without checking.
+  StringRef getGPUArch(const llvm::opt::ArgList &DriverArgs) const;
 };
 
 class LLVM_LIBRARY_VISIBILITY ROCMToolChain : public AMDGPUToolChain {
-protected:
-  RocmInstallationDetector RocmInstallation;
-
 public:
   ROCMToolChain(const Driver &D, const llvm::Triple &Triple,
                 const llvm::opt::ArgList &Args);

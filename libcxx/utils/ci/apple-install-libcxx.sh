@@ -20,15 +20,15 @@ ${PROGNAME} [options]
 
 [-h|--help]                  Display this help and exit.
 
---llvm-root <DIR>            Full path to the root of the LLVM monorepo. Only the libcxx
+--llvm-root <DIR>            Path to the root of the LLVM monorepo. Only the libcxx
                              and libcxxabi directories are required.
 
---build-dir <DIR>            Full path to the directory to use for building. This will
+--build-dir <DIR>            Path to the directory to use for building. This will
                              contain intermediate build products.
 
---install-dir <DIR>          Full path to the directory to install the library to.
+--install-dir <DIR>          Path to the directory to install the library to.
 
---symbols-dir <DIR>          Full path to the directory to install the .dSYM bundle to.
+--symbols-dir <DIR>          Path to the directory to install the .dSYM bundle to.
 
 --sdk <SDK>                  SDK used for building the library. This represents
                              the target platform that the library will run on.
@@ -97,6 +97,15 @@ for arg in llvm_root build_dir symbols_dir install_dir sdk architectures version
     fi
 done
 
+# Allow using relative paths
+function realpath() {
+    if [[ $1 = /* ]]; then echo "$1"; else echo "$(pwd)/${1#./}"; fi
+}
+for arg in llvm_root build_dir symbols_dir install_dir cache; do
+    path="$(realpath "${!arg}")"
+    eval "${arg}=\"${path}\""
+done
+
 function step() {
     separator="$(printf "%0.s-" $(seq 1 ${#1}))"
     echo
@@ -114,11 +123,10 @@ for arch in ${architectures}; do
     step "Building libc++.dylib and libc++abi.dylib for architecture ${arch}"
     mkdir -p "${build_dir}/${arch}"
     (cd "${build_dir}/${arch}" &&
-        xcrun --sdk "${sdk}" cmake "${llvm_root}/llvm" \
+        xcrun --sdk "${sdk}" cmake "${llvm_root}/libcxx/utils/ci/runtimes" \
             -GNinja \
             -DCMAKE_MAKE_PROGRAM="$(xcrun --sdk "${sdk}" --find ninja)" \
             -DLLVM_ENABLE_PROJECTS="libcxx;libcxxabi" \
-            -DLLVM_INCLUDE_BENCHMARKS=OFF \
             -C "${cache}" \
             -DCMAKE_INSTALL_PREFIX="${build_dir}/${arch}-install" \
             -DCMAKE_INSTALL_NAME_DIR="${install_name_dir}" \
